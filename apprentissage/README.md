@@ -54,9 +54,45 @@ cd apprentissage
 ../.venv/bin/python evaluation.py reseau   # précision sur les pages vérifiées à la main
 ```
 
-Ajouter des sites : `config.yaml` (vérifier d'abord que leurs conditions d'utilisation le permettent).
-L'exploration respecte `robots.txt`, attend `delai_secondes` entre deux pages et se limite à
-`pages_max_par_site`.
+## Protocole : lancer l'apprentissage sur de vrais sites
+
+**1. Choisir les sites.** Pour chaque entreprise, prendre l'adresse de sa **page carrières**
+(l'algorithme trouve seul les offres et les formulaires à partir de là). Vérifier que les conditions
+d'utilisation du site autorisent la lecture automatique.
+
+**2. Les ajouter dans [config.yaml](config.yaml)**, en remplaçant `sites: []` (deux espaces avant
+`- nom`, quatre avant `url`), puis enregistrer :
+
+```yaml
+sites:
+  - nom: Greenhouse Exemple
+    url: https://boards.greenhouse.io/nomdelentreprise
+  - nom: Autre entreprise
+    url: https://www.entreprise.com/carrieres
+```
+
+**3. Lancer**, depuis le terminal de VS Code :
+
+```bash
+cd ~/Downloads/job-rpa/apprentissage
+../.venv/bin/python autonome.py
+```
+
+- Premier lancement : apprentissage de départ (~30 s), puis exploration site par site.
+- Pour chaque site : pages visitées, puis un bilan (formulaires trouvés, nouveaux exemples appris,
+  précision, modèle gardé ou refusé).
+- 5 s d'attente entre deux pages : environ 2 minutes pour 20 pages par site.
+- `Ctrl + C` pour arrêter ; ce qui est appris est enregistré après chaque site terminé.
+
+**4. Si un site affiche « échec » sur toutes ses pages** (navigateur invisible bloqué), mettre
+`navigateur_visible: true` dans `config.yaml` : une fenêtre Chrome s'ouvre et montre la navigation.
+
+**5. Suivre les progrès** : un bilan par site dans `donnees/journal.jsonl`. Chaque lancement repart
+de ce qui a déjà été appris (`modeles/sauvegardes/`, `donnees/pseudo.jsonl`).
+
+Réglages de `config.yaml` : `delai_secondes` (pause entre deux pages), `pages_max_par_site`,
+`profondeur_max` (clics depuis la page de départ), `mots_cles_liens` (pour `collecte.py`).
+L'exploration respecte toujours `robots.txt` et ne remplit ni n'envoie aucun formulaire.
 
 **Améliorer le modèle à la main** : dans `donnees/brutes/<site>/*.json` (créés par `collecte.py`),
 corriger les `"etiquette"` fausses puis passer `"verifiee": true`. Ces pages comptent double à
