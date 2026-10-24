@@ -4,6 +4,8 @@
 const $app = document.getElementById("app");
 let ME = null;              // utilisateur connecté
 let pollTimer = null;
+let pollMs = 0;
+let GUIDE = null;            // parcours du candidat (/api/guide)
 
 // ---------- utilitaires ----------
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -13,7 +15,11 @@ async function api(path, opts = {}) {
   if (opts.body instanceof FormData) init.body = opts.body;
   else if (opts.body !== undefined) { init.body = JSON.stringify(opts.body); init.headers["Content-Type"] = "application/json"; }
   const res = await fetch(path, init);
-  if (res.status === 401 && !path.startsWith("/api/auth/")) { ME = null; go("#/login"); throw new Error("Session expirée, reconnecte-toi."); }
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    ME = null;
+    if (!/^#\/(login|register)/.test(location.hash)) sessionStorage.setItem("cp_next", location.hash || "#/");
+    go("#/login"); throw new Error("Session expirée, reconnecte-toi.");
+  }
   const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
   if (!res.ok) {
     let msg = data?.detail || `Erreur ${res.status}`;
@@ -63,11 +69,11 @@ const STATUS = {
   echec: ["Échec", "b-red"], incertaine: ["Incertaine", "b-amber"], ignoree: ["Ignorée", "b-mute"],
 };
 const statusBadge = (s) => `<span class="badge ${STATUS[s]?.[1] || "b-mute"}">${esc(STATUS[s]?.[0] || s)}</span>`;
-const MODES = { auto: "Envoi automatique", assisted: "Envoi assisté", manual: "Envoi manuel" };
+const MODES = { auto: "Automatique", assisted: "Assisté", manual: "Semi-assisté" };
 
 function appState(a) {
   if (a.statut === "a_valider") {
-    if (a.mode === "manual") return `<span class="badge b-mute">Envoi manuel</span>`;
+    if (a.mode === "manual") return `<span class="badge b-mute">Semi-assisté</span>`;
     if (a.open_questions) return `<span class="badge b-amber">${a.open_questions > 1 ? a.open_questions + " questions ouvertes" : "Question ouverte"}</span>`;
     return `<span class="badge b-violet">Prête à valider</span>`;
   }
@@ -87,40 +93,84 @@ const ICON = {
   tick: '<path d="M5 12l5 5 9-10"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   chev: '<path d="M9 6l6 6-6 6"/>',
+  doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>',
 };
 const svg = (name, size = 20, sw = 1.8) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
 const LOGO = `<span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-8 6 8"/><circle cx="12" cy="19" r="1.2" fill="#fff"/></svg></span>`;
 
 // ---------- squelette ----------
-let navBadge = 0;
+// Le menu suit les cinq étapes du parcours, cochées quand elles sont faites.
+const STEP_NAV = [["#/profil", "profile", "user", "Profil"], ["#/documents", "documents", "doc", "CV et lettre"],
+  ["#/criteres", "prefs", "sliders", "Critères et offres"], ["#/mode", "mode", "spark", "Mode de soumission"], ["#/envoi", "send", "check", "Valider l'envoi"]];
 function shell(active, content) {
   const name = `${ME.first_name || ""} ${ME.last_name ? ME.last_name[0] + "." : ""}`.trim() || ME.email;
   const link = (hash, key, icon, label, extra = "") =>
-    `<a href="${hash}" ${active === key ? 'aria-current="page"' : ""}>${svg(icon)}${label}${extra}</a>`;
+    `<a href="${hash}" ${active === key ? 'aria-current="page"' : ""}>${svg(icon)}<span class="grow">${label}</span>${extra}</a>`;
+  const steps = GUIDE?.steps || [];
   $app.innerHTML = `
   <div class="shell">
     <nav class="nav" aria-label="Navigation principale">
       <div class="brand">${LOGO}<span>CandiPilot</span></div>
       ${link("#/", "home", "home", "Accueil")}
-      ${link("#/a-valider", "validate", "check", "À valider", navBadge ? `<span class="badge b-violet">${navBadge}</span>` : "")}
-      ${link("#/candidatures", "apps", "board", "Candidatures")}
-      ${link("#/offres", "offers", "search", "Offres")}
+      <div class="navlabel">Mon parcours</div>
+      ${STEP_NAV.map(([h, k, ic, l], i) => link(h, k, ic, `${i + 1}. ${l}`,
+        steps[i]?.done ? `<span class="navtick" title="Étape faite">${svg("tick", 14, 2.4)}</span>` : GUIDE?.current === i ? '<span class="badge b-violet">À faire</span>' : "")).join("")}
       <div class="sep"></div>
-      ${link("#/criteres", "prefs", "sliders", "Critères")}
-      ${link("#/profil", "profile", "user", "Profil & documents")}
+      ${link("#/candidatures", "apps", "board", "Candidatures")}
+      ${link("#/offres", "offers", "search", "Toutes les offres")}
       <div class="me">
         <span class="avatar">${esc(initials(name))}</span>
         <span style="display:flex;flex-direction:column;line-height:1.3;min-width:0;flex:1">
           <b style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(name)}</b>
-          <small style="font-size:12px;color:var(--muted)">Formule gratuite</small>
+          <a href="#/compte" style="font-size:12px;color:var(--muted)">Mon compte</a>
         </span>
         <button class="btn btn-quiet btn-sm" id="logout" title="Se déconnecter" aria-label="Se déconnecter">${svg("out", 18)}</button>
       </div>
     </nav>
-    <main>${content}</main>
+    <main>${active === "home" ? "" : guideBanner()}${content}</main>
   </div>`;
-  document.getElementById("logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); ME = null; go("#/login"); };
+  document.getElementById("logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); ME = null; GUIDE = null; go("#/login"); };
+}
+
+// ---------- parcours guidé ----------
+// Bandeau « prochaine étape » en haut de chaque page, carte complète sur l'accueil.
+function guideCta(step) {
+  if (step.waiting) return `<span class="badge b-blue"><span class="spin"></span>En cours</span>`;
+  if (location.hash === step.href) return `<span class="badge b-violet">C'est ici ↓</span>`;
+  return `<a class="btn btn-primary" href="${step.href}">Y aller →</a>`;
+}
+
+const subList = (subs) => subs?.length ? `<ul class="subs">${subs.map((x) =>
+  `<li class="${x.done ? "done" : ""}"><span>${x.done ? "✓" : "○"}</span>${esc(x.label)}${x.detail ? ` <span class="sub">· ${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul>` : "";
+
+function guideBanner() {
+  if (!GUIDE) return "";
+  const g = GUIDE, cur = g.current !== null ? g.steps[g.current] : g.next;
+  if (!cur) return "";
+  const head = g.current !== null ? `Étape ${g.current + 1} sur ${g.steps.length}` : "Prochaine action";
+  return `<section class="guide" aria-label="Prochaine étape">
+    <span class="gnum">${g.current !== null ? g.current + 1 : "→"}</span>
+    <div class="grow"><div class="ghead">${head}</div><b>${esc(cur.label)}</b><div class="ghelp">${esc(cur.help)}</div>${subList(cur.subs)}</div>
+    ${guideCta(cur)}</section>`;
+}
+
+function guideChecklist() {
+  if (!GUIDE) return "";
+  const g = GUIDE, done = g.steps.filter((s) => s.done).length;
+  return `<section class="card pad stack" id="parcours">
+    <div class="spread"><div><h2>${g.current === null ? "Ton parcours est terminé" : "Ton parcours en 5 étapes"}</h2><div class="sub" style="font-size:14px">Suis-les dans l'ordre : à chaque étape, CandiPilot te dit exactement quoi faire.</div></div>
+      <span class="badge b-violet">${done} / ${g.steps.length} faites</span></div>
+    <div class="progress"><i style="width:${(done / g.steps.length) * 100}%"></i></div>
+    <ol class="steps">${g.steps.map((s, i) => `
+      <li class="${s.done ? "done" : i === g.current ? "now" : ""}">
+        <span class="gnum">${s.done ? svg("tick", 14, 2.4) : i + 1}</span>
+        <div class="grow"><b>${esc(s.label)}</b>${i === g.current ? `<div class="ghelp">${esc(s.help)}</div>${subList(s.subs)}` : ""}</div>
+        ${i === g.current ? guideCta(s) : s.done ? `<a class="btn btn-quiet btn-sm" href="${s.href}">Modifier</a>` : ""}
+      </li>`).join("")}</ol>
+    ${g.current === null && g.next ? guideBanner() : ""}
+  </section>`;
 }
 
 function modal(html, onMount) {
@@ -136,36 +186,87 @@ function modal(html, onMount) {
 }
 
 // ---------- authentification ----------
-function authView(mode) {
-  const reg = mode === "register";
+const pwField = (name, label, auto, hint = "") => `<label class="f">${label}
+  <span class="pw"><input type="password" name="${name}" autocomplete="${auto}" required ${auto === "new-password" ? 'minlength="8"' : ""}>
+  <button type="button" class="btn btn-quiet btn-sm" data-show aria-label="Afficher le mot de passe">${svg("eye", 18)}</button></span>${hint}</label>`;
+const PW_HINT = '<span class="hint">8 caractères minimum, avec au moins une lettre et un chiffre.</span>';
+
+function authCard(title, subtitle, form, footer) {
   $app.innerHTML = `
   <div class="auth"><div class="card pop">
     <div class="row">${LOGO}<b style="font-size:19px;letter-spacing:-.03em">CandiPilot</b></div>
-    <h1>${reg ? "Créer un compte" : "Connexion"}</h1>
-    <p class="sub" style="margin:0 0 20px">${reg ? "Ton copilote de candidatures, en quelques minutes." : "Content de te revoir."}</p>
-    <form class="form" id="authForm" novalidate>
-      ${reg ? `<div class="form two"><label class="f">Prénom<input type="text" name="first_name" autocomplete="given-name" required></label>
-               <label class="f">Nom<input type="text" name="last_name" autocomplete="family-name"></label></div>` : ""}
-      <label class="f">E-mail<input type="email" name="email" autocomplete="email" required></label>
-      <label class="f">Mot de passe<input type="password" name="password" autocomplete="${reg ? "new-password" : "current-password"}" minlength="8" required>
-        ${reg ? '<span class="hint">8 caractères minimum.</span>' : ""}</label>
-      <button class="btn btn-primary" type="submit">${reg ? "Créer mon compte" : "Se connecter"}</button>
-    </form>
-    <p class="sub" style="font-size:14px;margin:18px 0 0">${reg ? 'Déjà inscrit ? <a href="#/login">Se connecter</a>' : 'Pas encore de compte ? <a href="#/register">Créer un compte</a>'}</p>
+    <h1>${title}</h1>
+    <p class="sub" style="margin:0 0 20px">${subtitle}</p>
+    <form class="form" id="authForm" novalidate>${form}</form>
+    <p class="sub" style="font-size:14px;margin:18px 0 0">${footer}</p>
   </div></div>`;
-  document.getElementById("authForm").onsubmit = async (e) => {
+  $app.querySelectorAll("[data-show]").forEach((b) => b.onclick = () => {
+    const i = b.previousElementSibling; const show = i.type === "password";
+    i.type = show ? "text" : "password"; b.setAttribute("aria-label", show ? "Masquer le mot de passe" : "Afficher le mot de passe");
+  });
+  return document.getElementById("authForm");
+}
+
+function afterLogin() {
+  const next = sessionStorage.getItem("cp_next"); sessionStorage.removeItem("cp_next");
+  go(next && !/^#\/(login|register|mot-de-passe|reinitialiser)/.test(next) ? next : "#/");
+}
+
+function submitWith(form, fn) {
+  form.onsubmit = async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(new FormData(e.target));
-    const btn = e.target.querySelector("button"); btn.disabled = true;
-    try { await act(() => api(`/api/auth/${reg ? "register" : "login"}`, { method: "POST", body })); ME = await api("/api/auth/me"); go(reg ? "#/profil" : "#/"); }
-    catch { btn.disabled = false; }
+    const btn = form.querySelector("button[type=submit]"); btn.disabled = true;
+    try { await fn(Object.fromEntries(new FormData(form))); } catch { /* message déjà affiché */ } finally { btn.disabled = false; }
   };
+}
+
+function authView(mode) {
+  const reg = mode === "register";
+  const form = authCard(reg ? "Créer un compte" : "Connexion",
+    reg ? "Ton copilote de candidatures, en quelques minutes." : "Content de te revoir.",
+    `${reg ? `<div class="form two"><label class="f">Prénom<input type="text" name="first_name" autocomplete="given-name" required></label>
+               <label class="f">Nom<input type="text" name="last_name" autocomplete="family-name" required></label></div>` : ""}
+      <label class="f">E-mail<input type="email" name="email" autocomplete="email" required></label>
+      ${pwField("password", "Mot de passe", reg ? "new-password" : "current-password", reg ? PW_HINT : "")}
+      ${reg ? pwField("confirm", "Confirme le mot de passe", "new-password") : `<a href="#/mot-de-passe-oublie" style="font-size:14px;align-self:flex-end">Mot de passe oublié ?</a>`}
+      <button class="btn btn-primary" type="submit">${reg ? "Créer mon compte" : "Se connecter"}</button>`,
+    reg ? 'Déjà inscrit ? <a href="#/login">Se connecter</a>' : 'Pas encore de compte ? <a href="#/register">Créer un compte</a>');
+  submitWith(form, async (body) => {
+    if (reg && body.password !== body.confirm) { toast("Les deux mots de passe ne sont pas identiques.", true); throw new Error(); }
+    delete body.confirm;
+    await act(() => api(`/api/auth/${reg ? "register" : "login"}`, { method: "POST", body }));
+    ME = await api("/api/auth/me");
+    if (reg) go("#/"); else afterLogin();
+  });
+}
+
+function forgotView() {
+  const form = authCard("Mot de passe oublié", "Indique ton adresse : tu recevras un lien pour choisir un nouveau mot de passe.",
+    `<label class="f">E-mail<input type="email" name="email" autocomplete="email" required></label>
+     <button class="btn btn-primary" type="submit">Recevoir le lien</button>`,
+    '<a href="#/login">Retour à la connexion</a>');
+  submitWith(form, async (body) => {
+    await act(() => api("/api/auth/forgot", { method: "POST", body }));
+    form.innerHTML = `<div class="banner" role="status">Si un compte existe pour <b>${esc(body.email)}</b>, un lien valable 1 heure vient d'être envoyé. Pense à regarder tes courriers indésirables.</div>`;
+  });
+}
+
+function resetView() {
+  const token = new URLSearchParams(location.hash.split("?")[1] || "").get("token") || "";
+  const form = authCard("Nouveau mot de passe", "Choisis ton nouveau mot de passe. Tes autres appareils seront déconnectés.",
+    `${pwField("password", "Nouveau mot de passe", "new-password", PW_HINT)}${pwField("confirm", "Confirme le mot de passe", "new-password")}
+     <button class="btn btn-primary" type="submit">Enregistrer et me connecter</button>`,
+    '<a href="#/mot-de-passe-oublie">Demander un nouveau lien</a>');
+  submitWith(form, async (body) => {
+    if (body.password !== body.confirm) { toast("Les deux mots de passe ne sont pas identiques.", true); throw new Error(); }
+    await act(() => api("/api/auth/reset", { method: "POST", body: { token, password: body.password } }), "Mot de passe modifié.");
+    ME = await api("/api/auth/me"); history.replaceState(null, "", "#/"); route();
+  });
 }
 
 // ---------- accueil ----------
 async function dashboardView() {
   const d = await api("/api/dashboard");
-  navBadge = d.stats.to_validate;
   const s = d.stats, cp = d.copilot;
   const max = Math.max(1, ...d.chart.map((w) => w.confirmed + w.pending));
   const running = cp.jobs.find((j) => j.statut === "en_cours" || j.statut === "en_attente");
@@ -175,14 +276,15 @@ async function dashboardView() {
       <div class="titles"><h1>Bonjour ${esc(ME.first_name || "")} 👋</h1>
         <p class="sub" style="margin:4px 0 0">Votre copilote continue de rechercher les meilleures opportunités pour vous.</p></div>
       <button class="bell" id="bell" aria-label="Notifications">${svg("bell", 20)}${d.unread ? '<span class="pip"></span>' : ""}</button>
-      <a class="btn btn-primary" href="#/a-valider">Valider ${s.to_validate} dossier${s.to_validate > 1 ? "s" : ""}</a>
+
     </header>
+    ${guideChecklist()}
     ${cp.fake ? `<div class="banner"><span class="badge b-amber">Robot simulé</span> Mode démonstration : aucune candidature réelle n'est envoyée.</div>` : ""}
     <section class="grid g4">
       <div class="card pad stat"><div class="label">Offres analysées</div><div class="value">${s.offers.toLocaleString("fr-FR")}</div><div class="note ${s.offers_week ? "up" : ""}">+${s.offers_week} cette semaine</div></div>
       <div class="card pad stat"><div class="label">Correspondent à votre profil</div><div class="value">${s.matching}</div><div class="note">dont ${s.matching_high} au-dessus de 85 %</div></div>
       <div class="card pad stat"><div class="label">Candidatures envoyées</div><div class="value">${s.sent}</div><div class="note">envoi confirmé · ${s.pending} en attente</div></div>
-      <div class="card pad stat hero" onclick="location.hash='#/a-valider'"><div class="label">À valider par vous</div><div class="value">${s.to_validate}</div><div class="note" style="font-weight:600">Voir les dossiers →</div></div>
+      <div class="card pad stat hero" onclick="location.hash='#/envoi'"><div class="label">Prêts à valider</div><div class="value">${s.to_validate}</div><div class="note" style="font-weight:600">Voir les dossiers →</div></div>
     </section>
     <section class="grid g2">
       <div class="card pad copilot stack">
@@ -215,7 +317,7 @@ async function dashboardView() {
         <div class="spread" style="margin-bottom:8px"><h2>Candidatures à valider</h2><span class="badge b-violet">${s.to_validate} dossier${s.to_validate > 1 ? "s" : ""}</span></div>
         ${d.to_validate.length ? d.to_validate.map((a) => `
           <a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)}${a.localisation ? " · " + esc(a.localisation) : ""}</div></span>${appState(a)}${svg("chev", 18)}</a>`).join("")
-          : `<div class="empty">Aucun dossier à valider. Prépare une offre recommandée ci-dessous.</div>`}
+          : `<div class="empty">Aucun dossier à valider. Sélectionne une offre recommandée ci-dessous.</div>`}
       </div>
       <div class="card pad">
         <div class="spread" style="margin-bottom:8px"><h2>Activité récente</h2><button class="btn btn-quiet btn-sm" id="allEvents">Tout voir</button></div>
@@ -230,14 +332,14 @@ async function dashboardView() {
             <div class="spread">${mono(a.entreprise, 44)}<span class="badge b-violet">${a.score} % match</span></div>
             <div><div style="font-weight:600;font-size:17px">${esc(a.poste)}</div><div class="sub">${esc(a.entreprise)}</div></div>
             <div class="chips">${a.localisation ? `<span class="badge b-mute">${esc(a.localisation)}</span>` : ""}${a.contrat ? `<span class="badge b-mute">${esc(a.contrat)}</span>` : ""}${a.start_date ? `<span class="badge b-mute">${esc(monthLabel(a.start_date))}</span>` : ""}</div>
-            <button class="btn btn-ghost" data-prepare="${a.id}">Préparer ma candidature</button>
+            <button class="btn btn-ghost" data-select="${a.id}">Sélectionner cette offre</button>
           </div>`).join("") : `<div class="card empty">Aucune offre pour l'instant. Renseigne tes critères puis lance une recherche.</div>`}
       </div>
     </section>`);
   document.getElementById("pause").onclick = () => act(() => api(`/api/copilot/${cp.paused ? "resume" : "pause"}`, { method: "POST" })).then(route);
   document.getElementById("searchNow").onclick = () => act(() => api("/api/search", { method: "POST" }), "Recherche lancée : une fenêtre du robot peut s'ouvrir.").then(route);
   document.getElementById("bell").onclick = document.getElementById("allEvents").onclick = showEvents;
-  $app.querySelectorAll("[data-prepare]").forEach((b) => b.onclick = () => prepare(b.dataset.prepare));
+  $app.querySelectorAll("[data-select]").forEach((b) => b.onclick = () => selectOffer(b.dataset.select, true));
   schedulePoll(running ? 3000 : 15000);
 }
 
@@ -251,24 +353,9 @@ async function showEvents() {
          <div style="margin-top:12px">${evs.length ? evs.map(eventRow).join("") : '<div class="empty">Aucune notification.</div>'}</div>`);
 }
 
-async function prepare(id) {
-  await act(() => api(`/api/applications/${id}/prepare`, { method: "POST" }), "Préparation lancée : lettre et lecture du formulaire.");
-  go(`#/candidature/${id}`);
-}
-
-// ---------- à valider ----------
-async function toValidateView() {
-  const [ready, prep] = await Promise.all([api("/api/applications?statut=a_valider"), api("/api/applications?statut=preparation")]);
-  navBadge = ready.length;
-  shell("validate", `
-    <header class="head"><div class="titles"><h1>À valider</h1><p class="sub" style="margin:4px 0 0">Les dossiers préparés par ton copilote attendent ta décision.</p></div></header>
-    <div class="card pad">
-      ${ready.length ? ready.map((a) => `<a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)} · ${esc(MODES[a.mode])} · ${a.score} %</div></span>${appState(a)}${svg("chev", 18)}</a>`).join("")
-        : `<div class="empty">Aucun dossier à valider.</div>`}
-    </div>
-    ${prep.length ? `<h2 style="font-size:17px">En préparation</h2><div class="card pad">${prep.map((a) => `<a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)}</div></span><span class="badge b-blue"><span class="spin"></span>En préparation</span></a>`).join("")}</div>` : ""}`);
-  schedulePoll(prep.length ? 3000 : 0);
-}
+// Sélectionner une offre lance sa préparation technique (lettre, lecture du formulaire) : aucun envoi.
+const selectOffer = (id, on) => act(() => api(`/api/applications/${id}/select`, { method: "POST", body: { selected: on } }),
+  on ? "Offre sélectionnée : le robot prépare le dossier (rien n'est envoyé)." : "Offre retirée de la sélection.").then(route);
 
 // ---------- validation d'une candidature ----------
 async function applicationView(id) {
@@ -281,7 +368,6 @@ async function applicationView(id) {
   const pa = a.prepared_answers || {};
   const prepared = [["Date de disponibilité", pa.availability], ["Durée du stage", pa.duration], ["Langues", pa.languages], ["Convention de stage", pa.internship_agreement], ["Genre (formulaire JobTeaser)", pa.gender]];
   const isJT = a.apply_type === "jobteaser";
-  const canValidate = a.statut === "a_valider" && a.mode !== "manual" && !(a.mode === "auto" && openQ.length) && !busy;
 
   let banner = "";
   if (a.statut === "confirmee") banner = `<section class="card pad pop" style="background:#E2F6F1;border-color:#BDEBDF"><b style="color:#08584A">Candidature envoyée</b><div style="font-size:14px;color:#0B6B59">Preuve : ${esc(a.preuve)} · ${a.date_envoi ? new Date(a.date_envoi).toLocaleString("fr-FR") : ""}</div></section>`;
@@ -290,8 +376,8 @@ async function applicationView(id) {
   else if (a.statut === "echec") banner = `<section class="card pad" style="background:#FDECEA;border-color:#F5C2BC"><b style="color:#912018">Échec</b><div style="font-size:14px;color:#B42318">${esc(a.detail)}</div></section>`;
   else if (a.statut === "incertaine") banner = `<section class="card pad" style="background:#FFF3DD;border-color:#F6E2B8"><b style="color:#8A5300">Envoi incertain</b><div style="font-size:14px;color:#8A5300">${esc(a.detail)} — lance une vérification ou marque-la comme envoyée si tu as la confirmation.</div></section>`;
 
-  shell("validate", `
-    <a href="#/a-valider" class="btn btn-quiet" style="align-self:flex-start;padding:0 8px">${svg("back", 16, 2)}Candidatures à valider</a>
+  shell("send", `
+    <a href="#/envoi" class="btn btn-quiet" style="align-self:flex-start;padding:0 8px">${svg("back", 16, 2)}Récapitulatif d'envoi</a>
     <header class="head">
       ${mono(a.entreprise, 60)}
       <div class="titles"><h1 style="font-size:30px">${esc(a.poste)}</h1>
@@ -300,10 +386,10 @@ async function applicationView(id) {
     </header>
     ${banner}
     <section class="modes" aria-label="Mode d'envoi">
-      ${[["auto", "Envoi automatique", isJT ? "Le robot remplit et envoie, puis vérifie la preuve de réception." : "Indisponible : candidature sur le site de l'entreprise."],
-         ["assisted", "Envoi assisté", isJT ? "Le robot pré-remplit, tu cliques sur « Postuler maintenant »." : "Indisponible : candidature sur le site de l'entreprise."],
-         ["manual", "Envoi manuel", "Dossier prêt à télécharger, envoi par tes soins."]].map(([k, t, d]) =>
-        `<button class="mode" data-mode="${k}" aria-pressed="${a.mode === k}" ${!editable || (k !== "manual" && !isJT) ? "disabled" : ""}><b>${a.mode === k ? "● " : ""}${t}</b><span>${d}</span></button>`).join("")}
+      ${[["auto", "Automatique", isJT ? "Le robot remplit et envoie, puis vérifie la preuve de réception." : "Indisponible : candidature sur le site de l'entreprise."],
+         ["assisted", "Assisté", isJT ? "Le robot pré-remplit, tu cliques sur « Postuler maintenant »." : "Indisponible : candidature sur le site de l'entreprise."],
+         ["manual", "Semi-assisté", "Dossier prêt à télécharger, tu postules toi-même."]].map(([k, t, d]) =>
+        `<button class="mode" data-mode="${k}" aria-pressed="${a.mode === k}" ${!editable || a.launched || (k !== "manual" && !isJT) ? "disabled" : ""}><b>${a.mode === k ? "● " : ""}${t}</b><span>${d}</span></button>`).join("")}
     </section>
     <div class="side">
       <div class="stack" style="gap:20px">
@@ -317,7 +403,10 @@ async function applicationView(id) {
             <div class="stack" style="gap:4px;min-width:0"><span class="hint">Lettre adaptée</span>
               <b>${a.letter_path ? "Lettre PDF prête" : "Pas encore générée"}</b>
               <span class="sub" style="font-size:13px">${a.letter_needed === 0 ? "Non demandée par le recruteur" : a.letter_needed === 1 ? "Demandée par le recruteur" : "Adaptée aux missions de l'offre"}</span>
-              <span class="row" style="gap:12px">${a.letter_path ? `<a href="/api/applications/${a.id}/letter" target="_blank" rel="noopener">Prévisualiser</a>` : ""}${editable && a.letter_text ? `<a href="#" id="editLetter">Modifier</a>` : ""}</span>
+              <span class="sub" style="font-size:13px">${a.letter_kind === "document" ? "Ta lettre importée" : a.letter_kind === "generated" ? "Lettre adaptée à l'offre" : ""}</span>
+              <span class="row" style="gap:12px;flex-wrap:wrap">${a.letter_path ? `<a href="/api/applications/${a.id}/letter" target="_blank" rel="noopener">Prévisualiser</a>` : ""}${editable && a.letter_text ? `<a href="#" id="editLetter">Modifier le texte</a>` : ""}
+                ${editable && !a.launched && a.letter_kind === "document" ? `<a href="#" data-letter="generated">Générer une lettre adaptée</a>` : ""}
+                ${editable && !a.launched && a.letter_kind === "generated" && a.imported_letter ? `<a href="#" data-letter="document">Utiliser ma lettre importée</a>` : ""}</span>
             </div></div>
         </section>
         <section class="card pad">
@@ -338,7 +427,9 @@ async function applicationView(id) {
         <div class="spread" style="font-size:14px"><span class="sub">Dossier prêt</span><b>${ready} / ${a.readiness.length}</b></div>
         <div class="progress"><i style="width:${(ready / a.readiness.length) * 100}%"></i></div>
         <ul style="list-style:none;margin:0;padding:0;font-size:13px;display:grid;gap:4px">${a.readiness.map((r) => `<li style="color:${r.ok ? "var(--green)" : "var(--muted)"}">${r.ok ? "✓" : "○"} ${esc(r.label)}</li>`).join("")}</ul>
-        ${actionsFor(a, canValidate, openQ, busy)}
+        ${a.selected && !a.launched && a.blockers.length ? `<div class="stack" style="gap:6px">${a.blockers.map((b) => `<div class="blk${b.wait ? " wait" : ""}">${b.wait ? '<span class="spin"></span>' : "!"} ${esc(b.label)}</div>`).join("")}</div>` : ""}
+        ${a.warnings.map((w) => `<div class="hint">ⓘ ${esc(w)}</div>`).join("")}
+        ${actionsFor(a, busy)}
         <p class="hint" style="margin:0">${statusHelp(a, openQ)}</p>
       </aside>
     </div>`);
@@ -359,39 +450,53 @@ async function applicationView(id) {
       (el, close) => el.querySelector("#saveLt").onclick = () => act(() => api(`/api/applications/${id}`, { method: "PUT", body: { letter_text: el.querySelector("#lt").value } }), "Lettre mise à jour.").then(() => { close(); route(); }));
   });
   const on = (sel, fn) => document.getElementById(sel)?.addEventListener("click", fn);
-  on("doValidate", () => act(() => api(`/api/applications/${id}/validate`, { method: "POST" }), a.mode === "assisted" ? "Le robot ouvre le formulaire : clique « Postuler maintenant » dans sa fenêtre." : "Candidature validée : envoi en cours.").then(route));
+  const put = (body, msg) => act(() => api(`/api/applications/${id}`, { method: "PUT", body }), msg).then(route);
+  on("doSelect", () => selectOffer(id, true));
+  on("doUnselect", () => selectOffer(id, false));
+  on("doCustomized", () => put({ customized: true }, "Dossier vérifié."));
+  on("doReviewed", () => put({ reviewed: true }, "Envoi autorisé : il partira au lancement final."));
+  on("doUnreview", () => put({ reviewed: false }, "Autorisation retirée."));
   on("doPrepare", () => act(() => api(`/api/applications/${id}/prepare`, { method: "POST" }), "Préparation lancée.").then(route));
-  on("doIgnore", () => act(() => api(`/api/applications/${id}/ignore`, { method: "POST" }), "Offre ignorée.").then(() => go("#/a-valider")));
+  $app.querySelectorAll("[data-letter]").forEach((l) => l.onclick = (e) => { e.preventDefault();
+    put({ letter_kind: l.dataset.letter }, l.dataset.letter === "generated" ? "Lettre adaptée générée." : "Ta lettre importée sera utilisée."); });
+  on("doIgnore", () => act(() => api(`/api/applications/${id}/ignore`, { method: "POST" }), "Offre ignorée.").then(() => go("#/envoi")));
   on("doRestore", () => act(() => api(`/api/applications/${id}/restore`, { method: "POST" }), "Offre restaurée.").then(route));
-  on("doRetry", () => act(() => api(`/api/applications/${id}/retry`, { method: "POST" })).then(route));
+  on("doRetry", () => act(() => api(`/api/applications/${id}/retry`, { method: "POST" }), "Dossier remis dans le récapitulatif d'envoi.").then(route));
   on("doVerify", () => act(() => api(`/api/applications/${id}/verify`, { method: "POST" }), "Vérification lancée.").then(route));
   on("doMarkSent", () => { if (confirm("Confirmes-tu avoir envoyé cette candidature toi-même ?")) act(() => api(`/api/applications/${id}/mark-sent`, { method: "POST" }), "Candidature marquée comme envoyée.").then(route); });
   on("doModify", () => document.querySelector("#qForm textarea, #cvSel, [data-mode]")?.focus());
   schedulePoll(["preparation", "soumission"].includes(a.statut) || busy ? 3000 : 0);
 }
 
-function actionsFor(a, canValidate, openQ, busy) {
-  const s = a.statut;
-  if (["decouverte", "qualifiee"].includes(s)) return `<button class="btn btn-ai" id="doPrepare">Préparer le dossier</button><button class="btn btn-ghost" id="doIgnore">Ignorer</button>`;
+function actionsFor(a, busy) {
+  const s = a.statut, f = a.flow;
+  const toRecap = `<a class="btn btn-ghost" href="#/envoi">Aller au récapitulatif d'envoi</a>`;
+  if (s === "ignoree") return `<button class="btn btn-ghost" id="doRestore">Restaurer l'offre</button>`;
   if (s === "preparation" || busy) return `<button class="btn btn-ai" disabled><span class="spin"></span> Robot au travail…</button>`;
-  if (s === "a_valider" && a.mode === "manual") return `
+  if (["decouverte", "qualifiee", "a_valider"].includes(s) && !a.selected)
+    return `<button class="btn btn-ai" id="doSelect">Sélectionner pour l'envoi</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
+  if (["decouverte", "qualifiee"].includes(s)) return `<button class="btn btn-ai" id="doPrepare">Préparer le dossier</button><button class="btn btn-quiet" id="doUnselect">Retirer de la sélection</button>`;
+  if (s === "a_valider" && a.launched && a.mode === "manual") return `
     <a class="btn btn-ghost" href="${esc(a.url)}" target="_blank" rel="noopener">Ouvrir le site de l'offre</a>
     ${a.letter_path ? `<a class="btn btn-ghost" href="/api/applications/${a.id}/letter" target="_blank" rel="noopener">Télécharger la lettre</a>` : ""}
     ${a.cv ? `<a class="btn btn-ghost" href="/api/documents/${a.cv.id}/file" target="_blank" rel="noopener">Télécharger le CV</a>` : ""}
-    <button class="btn btn-primary" id="doMarkSent">Marquer comme envoyée</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
-  if (s === "a_valider") return `<button class="btn btn-ai" id="doValidate" ${canValidate ? "" : "disabled"}>Valider la candidature</button>
-    <div class="row"><button class="btn btn-ghost" style="flex:1" id="doModify">Modifier</button><button class="btn btn-ghost" style="flex:1" id="doIgnore">Ignorer</button></div>
-    <button class="btn btn-quiet btn-sm" id="doPrepare">Relire le formulaire</button>`;
-  if (s === "echec") return `<button class="btn btn-primary" id="doRetry">Réessayer</button>${a.apply_type === "jobteaser" ? '<button class="btn btn-ghost" id="doVerify">Vérifier sur JobTeaser</button>' : ""}<button class="btn btn-ghost" id="doMarkSent">Je l'ai envoyée moi-même</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
-  if (s === "incertaine") return `<button class="btn btn-primary" id="doVerify">Vérifier sur JobTeaser</button><button class="btn btn-ghost" id="doMarkSent">Marquer comme envoyée</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
-  if (s === "ignoree") return `<button class="btn btn-ghost" id="doRestore">Restaurer l'offre</button>`;
+    <button class="btn btn-primary" id="doMarkSent">Je l'ai envoyée</button>`;
+  if (s === "a_valider") return `
+    ${f.prepare ? (a.customized ? '<div class="blk ok">✓ Dossier vérifié</div>' : `<button class="btn btn-ai" id="doCustomized">J'ai vérifié ce dossier</button>`) : ""}
+    ${f.review ? (a.reviewed ? `<div class="blk ok">✓ Envoi autorisé</div><button class="btn btn-quiet btn-sm" id="doUnreview">Retirer l'autorisation</button>` : `<button class="btn btn-primary" id="doReviewed">Autoriser l'envoi</button>`) : ""}
+    ${toRecap}
+    <div class="row"><button class="btn btn-quiet" style="flex:1" id="doUnselect">Retirer de la sélection</button><button class="btn btn-quiet" style="flex:1" id="doPrepare">Relire le formulaire</button></div>`;
+  if (s === "echec") return `<button class="btn btn-primary" id="doRetry">Reprendre</button>${a.apply_type === "jobteaser" ? '<button class="btn btn-ghost" id="doVerify">Vérifier sur JobTeaser</button>' : ""}<a class="btn btn-ghost" href="${esc(a.url)}" target="_blank" rel="noopener">Ouvrir l'offre</a><button class="btn btn-ghost" id="doMarkSent">Je l'ai envoyée moi-même</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
+  if (s === "incertaine") return `<button class="btn btn-primary" id="doVerify">Vérifier sur JobTeaser</button><button class="btn btn-ghost" id="doMarkSent">Je l'ai envoyée</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
   return "";
 }
 
 function statusHelp(a, openQ) {
-  if (a.statut === "a_valider" && a.mode === "auto" && openQ.length) return "Réponds à la question ouverte pour pouvoir valider en envoi automatique, ou passe en envoi assisté.";
-  if (a.statut === "a_valider" && a.mode === "assisted") return "Le robot remplit le formulaire dans sa fenêtre ; tu cliques toi-même « Postuler maintenant ». Il détecte ensuite la confirmation.";
-  if (a.statut === "a_valider" && a.mode === "auto") return "Le robot envoie lui-même la candidature, puis attend la preuve de réception de JobTeaser.";
+  if (a.statut === "a_valider" && !a.launched) {
+    if (!a.selected) return "Sélectionne cette offre pour l'inclure dans ton prochain lancement.";
+    return "Rien ne part d'ici : l'envoi se déclenche uniquement avec « Valider et démarrer le robot » dans le récapitulatif.";
+  }
+  if (a.statut === "a_valider" && a.mode === "manual") return "Postule sur le site avec ce CV et cette lettre, puis clique « Je l'ai envoyée ».";
   if (a.statut === "confirmee") return "Une candidature n'est « Envoyée » qu'avec une preuve vérifiable.";
   return "";
 }
@@ -412,7 +517,7 @@ async function applicationsView() {
   shell("apps", `
     <header class="head"><div class="titles"><h1>Mes candidatures</h1><p class="sub" style="margin:4px 0 0">${apps.length} candidature${apps.length > 1 ? "s" : ""} · ${attention} demande${attention > 1 ? "nt" : ""} ton attention</p></div>
       <div class="seg" role="group" aria-label="Affichage"><button data-b="kanban" aria-pressed="${boardMode === "kanban"}">Kanban</button><button data-b="list" aria-pressed="${boardMode === "list"}">Liste</button></div>
-      <a class="btn btn-primary" href="#/a-valider">Valider ${navBadge} dossier${navBadge > 1 ? "s" : ""}</a></header>
+      <a class="btn btn-primary" href="#/envoi">Valider l'envoi</a></header>
     <div class="banner"><span style="color:var(--violet)">ⓘ</span>Une candidature passe en « Envoyée » uniquement quand le site de l'employeur a confirmé la réception. Tant que ce n'est pas le cas, elle reste « En cours d'envoi ».</div>
     ${boardMode === "kanban" ? `<div class="kanban">${lanes.map(([t, ss]) => { const items = apps.filter((a) => ss.includes(a.statut)); return `<div class="lane"><div class="lh"><span>${t}</span><span>${items.length}</span></div>${items.map(card).join("") || '<div class="k" style="padding:6px;font-size:13px;color:var(--muted)">—</div>'}</div>`; }).join("")}</div>`
     : `<div class="card tablewrap"><table><thead><tr><th>Poste</th><th>Entreprise</th><th>Match</th><th>Mode</th><th>Statut</th><th>Mis à jour</th><th></th></tr></thead><tbody>
@@ -437,12 +542,13 @@ async function offersView() {
       ${offers.map((o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${esc(o.source)}</div></td>
         <td>${esc(o.entreprise)}</td><td class="sub">${esc(o.localisation)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td>
         <td><span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}">${o.score} %</span></td><td>${o.statut ? statusBadge(o.statut) : ""}</td>
-        <td style="white-space:nowrap">${o.application_id ? `<a class="btn btn-quiet btn-sm" href="#/candidature/${o.application_id}">Ouvrir</a>` : ""}<button class="btn btn-quiet btn-sm" data-edit="${o.id}">Modifier</button>
+        <td style="white-space:nowrap">${selectBtn(o)}${o.application_id ? `<a class="btn btn-quiet btn-sm" href="#/candidature/${o.application_id}">Ouvrir</a>` : ""}<button class="btn btn-quiet btn-sm" data-edit="${o.id}">Modifier</button>
           ${["soumission", "confirmee"].includes(o.statut) ? "" : `<button class="btn btn-quiet btn-sm" data-del="${o.id}" style="color:var(--red)">Supprimer</button>`}</td></tr>`).join("") || '<tr><td colspan="7" class="empty">Aucune offre. Lance une recherche ou ajoute une offre à la main.</td></tr>'}
     </tbody></table></div>`);
   let t; document.getElementById("q").oninput = (e) => { clearTimeout(t); t = setTimeout(() => { sessionStorage.setItem("cp_q", e.target.value); route().then(() => { const i = document.getElementById("q"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }); }, 300); };
   document.getElementById("addOffer").onclick = () => offerForm();
-  document.getElementById("searchNow").onclick = () => act(() => api("/api/search", { method: "POST" }), "Recherche lancée : une fenêtre du robot peut s'ouvrir.");
+  bindSelect();
+  document.getElementById("searchNow").onclick = () => act(() => api("/api/search", { method: "POST" }), "Recherche lancée : les offres arrivent dans quelques minutes.").then(route);
   $app.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => offerForm(offers.find((o) => o.id === b.dataset.edit)));
   $app.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => { if (confirm("Supprimer cette offre ?")) act(() => api(`/api/offers/${b.dataset.del}`, { method: "DELETE" }), "Offre supprimée.").then(route); });
 }
@@ -466,27 +572,48 @@ function offerForm(o = null) {
     });
 }
 
-// ---------- critères (préférences) ----------
+// ---------- sélection d'offres (étape 3) ----------
+const selectBtn = (o) => !o.application_id || o.launched || ["soumission", "confirmee"].includes(o.statut) ? ""
+  : o.selected ? `<button class="btn btn-ghost btn-sm" data-sel="${o.application_id}" data-on="0" aria-pressed="true">✓ Sélectionnée</button>`
+  : `<button class="btn btn-ai btn-sm" data-sel="${o.application_id}" data-on="1">Sélectionner</button>`;
+const bindSelect = () => $app.querySelectorAll("[data-sel]").forEach((b) => b.onclick = () => selectOffer(b.dataset.sel, b.dataset.on === "1"));
+
+// ---------- étape 3 : critères et offres ----------
 async function prefsView() {
-  const p = await api("/api/preferences");
+  const [p, offers] = await Promise.all([api("/api/preferences"), api("/api/offers")]);
   const lists = { metiers: [...p.metiers], zones: [...p.zones], contrats: [...p.contrats] };
+  const open = offers.filter((o) => !["ignoree", "confirmee", "soumission"].includes(o.statut) && !o.launched);
+  const nSel = open.filter((o) => o.selected).length;
+  const searching = GUIDE?.searching;
   shell("prefs", `
-    <header class="head"><div class="titles"><h1>Critères de recherche</h1><p class="sub" style="margin:4px 0 0">Métiers, zones et contrats que ton copilote recherche pour toi.</p></div></header>
+    <header class="head"><div class="titles"><h1>3. Critères et offres</h1><p class="sub" style="margin:4px 0 0">Indique ce que tu cherches, lance la recherche, puis coche les offres auxquelles postuler. Rien n'est envoyé à cette étape.</p></div></header>
     <form class="card pad form" id="pf">
-      ${[["metiers", "Métiers ciblés (mots-clés JobTeaser)", "ex. private debt, M&A, corporate finance"], ["zones", "Zones géographiques", "ex. Paris, France — vide = partout"], ["contrats", "Types de contrat", "ex. stage, alternance"]].map(([k, l, ph]) => `
+      <h2>Mes critères</h2>
+      ${[["metiers", "Métiers ciblés *", "ex. private debt, M&A, corporate finance"], ["zones", "Localisations", "ex. Paris, France — vide = partout"], ["contrats", "Types de contrat", "ex. stage, alternance"]].map(([k, l, ph]) => `
         <div class="f" style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">${l}
           <div class="chips" id="c_${k}"></div>
           <input type="text" data-list="${k}" placeholder="${ph} — Entrée pour ajouter" aria-label="${l}"></div>`).join("")}
       <div class="form two">
-        <label class="f">Date de début minimale<input type="date" name="start_from" value="${esc(p.start_from)}"><span class="hint">Les offres qui commencent avant sont écartées.</span></label>
+        <label class="f">Disponible à partir du<input type="date" name="start_from" value="${esc(p.start_from)}"><span class="hint">Les offres qui commencent avant sont écartées.</span></label>
         <label class="f">Score minimal pour retenir une offre<input type="number" name="min_score" min="0" max="100" value="${p.min_score}"></label>
         <label class="f">Pages de résultats lues par mot-clé<input type="number" name="max_pages" min="1" max="10" value="${p.max_pages}"></label>
         <label class="f">Recherche automatique toutes les (heures)<input type="number" name="search_every_hours" min="1" max="168" value="${p.search_every_hours}"></label>
-        <label class="f">Mode d'envoi par défaut<select name="default_mode"><option value="auto" ${p.default_mode === "auto" ? "selected" : ""}>Envoi automatique</option><option value="assisted" ${p.default_mode === "assisted" ? "selected" : ""}>Envoi assisté</option><option value="manual" ${p.default_mode === "manual" ? "selected" : ""}>Envoi manuel</option></select></label>
       </div>
-      <label class="check"><input type="checkbox" name="include_external" ${p.include_external ? "checked" : ""}> Inclure les offres à finir sur le site de l'entreprise (envoi manuel)</label>
-      <div class="row"><button class="btn btn-primary" type="submit">Enregistrer</button><button class="btn btn-ghost" type="button" id="searchNow">Enregistrer et lancer une recherche</button></div>
-    </form>`);
+      <label class="check"><input type="checkbox" name="include_external" ${p.include_external ? "checked" : ""}> Inclure les offres à finir sur le site de l'entreprise (semi-assisté)</label>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-ghost" type="submit">Enregistrer</button>
+        <button class="btn btn-primary" type="button" id="searchNow" ${searching ? "disabled" : ""}>${searching ? '<span class="spin"></span> Recherche en cours…' : "Rechercher des offres"}</button></div>
+    </form>
+    <section class="card pad stack">
+      <div class="spread"><div><h2>Offres trouvées</h2><div class="sub" style="font-size:14px">${open.length} offre${open.length > 1 ? "s" : ""} · <b>${nSel} sélectionnée${nSel > 1 ? "s" : ""}</b></div></div>
+        ${nSel ? `<a class="btn btn-primary" href="#/mode">Continuer : étape 4 →</a>` : ""}</div>
+      ${open.length ? `<div class="tablewrap"><table><thead><tr><th>Poste</th><th>Entreprise</th><th>Début</th><th>Match</th><th>Préparation</th><th></th></tr></thead><tbody>
+        ${open.map((o) => `<tr class="${o.selected ? "selrow" : ""}"><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée JobTeaser" : "Site de l'entreprise"}${o.localisation ? " · " + esc(o.localisation) : ""}</div></td>
+          <td>${esc(o.entreprise)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td>
+          <td><span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}">${o.score} %</span></td>
+          <td>${!o.selected ? "" : o.statut === "preparation" ? '<span class="badge b-blue"><span class="spin"></span>En cours</span>' : o.statut === "a_valider" ? '<span class="badge b-green">Prêt</span>' : statusBadge(o.statut)}</td>
+          <td style="white-space:nowrap">${selectBtn(o)}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">${searching ? "Recherche en cours : les offres arrivent dans quelques minutes." : "Aucune offre pour l'instant. Renseigne tes critères puis clique « Rechercher des offres »."}</div>`}
+    </section>`);
   const draw = (k) => { document.getElementById("c_" + k).innerHTML = lists[k].map((v, i) => `<span class="chip">${esc(v)}<button type="button" data-rm="${k}:${i}" aria-label="Retirer ${esc(v)}">×</button></span>`).join("") || '<span class="hint">Aucun</span>'; };
   Object.keys(lists).forEach(draw);
   $app.querySelectorAll("[data-list]").forEach((inp) => inp.onkeydown = (e) => {
@@ -497,82 +624,249 @@ async function prefsView() {
     $app.querySelectorAll("[data-list]").forEach((inp) => { const v = inp.value.trim(); if (v && !lists[inp.dataset.list].includes(v)) lists[inp.dataset.list].push(v); inp.value = ""; });
     const f = new FormData(document.getElementById("pf"));
     const body = { ...lists, start_from: f.get("start_from") || "", min_score: +f.get("min_score"), max_pages: +f.get("max_pages"),
-      search_every_hours: +f.get("search_every_hours"), default_mode: f.get("default_mode"), include_external: f.get("include_external") === "on" };
-    await act(() => api("/api/preferences", { method: "PUT", body }), "Critères enregistrés. Les scores ont été recalculés.");
-    Object.keys(lists).forEach(draw);
+      search_every_hours: +f.get("search_every_hours"), include_external: f.get("include_external") === "on" };
+    await act(() => api("/api/preferences", { method: "PUT", body }), "Critères enregistrés.");
   };
-  document.getElementById("pf").onsubmit = (e) => { e.preventDefault(); save(); };
-  document.getElementById("searchNow").onclick = async () => { await save(); act(() => api("/api/search", { method: "POST" }), "Recherche lancée : une fenêtre du robot peut s'ouvrir."); };
+  document.getElementById("pf").onsubmit = (e) => { e.preventDefault(); save().then(route); };
+  document.getElementById("searchNow").onclick = async () => { await save(); await act(() => api("/api/search", { method: "POST" }), "Recherche lancée : les offres arrivent dans quelques minutes. Aucun envoi."); route(); };
+  bindSelect();
+  if (searching || open.some((o) => o.selected && o.statut === "preparation")) schedulePoll(4000);
 }
 
-// ---------- profil, documents, compte ----------
+// ---------- étape 1 : profil ----------
 async function profileView() {
-  const [p, docs] = await Promise.all([api("/api/profile"), api("/api/documents")]);
-  const field = (k, l, type = "text", ph = "") => `<label class="f">${l}<input type="${type}" name="${k}" value="${esc(p[k])}" placeholder="${esc(ph)}"></label>`;
+  const p = await api("/api/profile");
+  const req = new Set(["first_name", "last_name", "phone", "availability", "gender"]);
+  const field = (k, l, type = "text", ph = "") => `<label class="f">${l}${req.has(k) ? " *" : ""}<input type="${type}" name="${k}" value="${esc(p[k])}" placeholder="${esc(ph)}" ${req.has(k) ? "required" : ""}></label>`;
   shell("profile", `
-    <header class="head"><div class="titles"><h1>Profil & documents</h1><p class="sub" style="margin:4px 0 0">Ces informations servent à remplir tes candidatures et à personnaliser tes lettres.</p></div>
-      <button class="btn btn-ghost" id="importYaml" title="Importe config/profile.yaml du robot">Importer le profil du robot</button></header>
+    <header class="head"><div class="titles"><h1>1. Mon profil</h1><p class="sub" style="margin:4px 0 0">Ces informations remplissent tes candidatures. Les champs marqués * sont obligatoires.</p></div>
+      ${ME.owner ? '<button class="btn btn-ghost" id="importYaml" title="Importe config/profile.yaml du robot">Importer le profil du robot</button>' : ""}</header>
     <form class="card pad form" id="prf">
-      <h2>Informations</h2>
+      <h2>Informations personnelles</h2>
       <div class="form two">${field("first_name", "Prénom")}${field("last_name", "Nom")}
-        <label class="f">E-mail<input type="email" value="${esc(p.email)}" disabled><span class="hint">Identifiant de connexion.</span></label>
+        <label class="f">E-mail<input type="email" value="${esc(p.email)}" disabled><span class="hint">Modifiable dans <a href="#/compte">Mon compte</a>.</span></label>
         ${field("phone", "Téléphone", "text", "+33…")}${field("linkedin", "LinkedIn", "url", "https://www.linkedin.com/in/…")}${field("location", "Ville", "text", "Paris, France")}
         ${field("school", "École")}${field("program", "Programme")}</div>
       <label class="f">Compétences<input type="text" name="competences" value="${esc(p.competences)}" placeholder="ex. Python, SQL, DCF, Excel, private debt"><span class="hint">Utilisées pour le calcul du % de compatibilité.</span></label>
-      <h2 style="margin-top:8px">Réponses préparées</h2>
+      <h2 style="margin-top:8px">Réponses aux formulaires</h2>
       <div class="form two">${field("availability", "Date de disponibilité", "text", "Mars 2027")}${field("duration", "Durée du stage", "text", "6 mois")}
         ${field("languages", "Langues", "text", "Français (natif), anglais (courant)")}${field("internship_agreement", "Convention de stage", "text", "Oui, fournie par l'école")}
-        <label class="f">Genre (demandé par JobTeaser)<select name="gender"><option value="">—</option>${["Homme", "Femme", "Autre"].map((g) => `<option ${p.gender === g ? "selected" : ""}>${g}</option>`).join("")}</select></label></div>
-      <h2 style="margin-top:8px">Modèle de lettre de motivation</h2>
-      <label class="f"><span class="hint">Variables remplacées pour chaque offre : {role}, {company}, {de_company}, {domain_line}, {domain}.</span><textarea name="letter_template" style="min-height:260px">${esc(p.letter_template)}</textarea></label>
+        <label class="f">Genre (demandé par JobTeaser) *<select name="gender" required><option value="">—</option>${["Homme", "Femme", "Autre"].map((g) => `<option ${p.gender === g ? "selected" : ""}>${g}</option>`).join("")}</select></label></div>
       <div><button class="btn btn-primary" type="submit">Enregistrer le profil</button></div>
-    </form>
+    </form>`);
+  document.getElementById("prf").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/profile", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Profil enregistré.").then(async () => { ME = await api("/api/auth/me"); route(); }); };
+  if (ME.owner) document.getElementById("importYaml").onclick = () => act(() => api("/api/profile/import-yaml", { method: "POST" })).then((r) => { toast("Importé : " + r.imported.join(", ") + "."); route(); });
+}
+
+// ---------- étape 2 : CV et lettre ----------
+async function documentsView() {
+  const [docs, wf, p] = await Promise.all([api("/api/documents"), api("/api/workflow"), api("/api/profile")]);
+  const cv = docs.find((d) => d.type === "cv" && d.is_default), lettre = docs.find((d) => d.type === "lettre" && d.is_default);
+  const slot = (d, type, label) => `
+    <div class="doc"><div class="thumb"><i class="d"></i><i></i><i></i><i class="v"></i><i></i></div>
+      <div class="stack" style="gap:4px;min-width:0"><span class="hint">${label}</span>
+        ${d ? `<b style="overflow-wrap:anywhere">${esc(d.name)}</b><span class="sub" style="font-size:13px">Version ${d.version} · ajouté ${ago(d.created_at)}</span>
+               <span class="row" style="gap:12px"><a href="/api/documents/${d.id}/file" target="_blank" rel="noopener">Voir</a></span>` : `<b>Aucun fichier</b>`}
+        <form class="row upform" data-type="${type}" style="flex-wrap:wrap;margin-top:6px"><input type="file" name="file" accept="application/pdf" required aria-label="${label} (PDF)" style="max-width:240px">
+          <button class="btn btn-primary btn-sm" type="submit">${d ? "Remplacer" : "Importer"} (PDF)</button></form>
+      </div></div>`;
+  shell("documents", `
+    <header class="head"><div class="titles"><h1>2. CV et lettre de motivation</h1><p class="sub" style="margin:4px 0 0">Les documents sélectionnés ici sont utilisés pour tes candidatures.</p></div></header>
+    <section class="card pad stack"><h2>Mon CV *</h2>${slot(cv, "cv", "CV utilisé pour les candidatures")}</section>
     <section class="card pad stack">
-      <div class="spread"><h2>CV et lettres</h2>
-        <form id="up" class="row" style="flex-wrap:wrap"><select name="type" style="width:auto"><option value="cv">CV</option><option value="lettre">Lettre</option></select>
-          <input type="file" name="file" accept="application/pdf" required style="max-width:260px"><button class="btn btn-primary btn-sm" type="submit">Importer (PDF)</button></form></div>
-      ${docs.length ? `<div class="tablewrap"><table><thead><tr><th>Document</th><th>Type</th><th>Version</th><th>Ajouté</th><th></th></tr></thead><tbody>
-        ${docs.map((d) => `<tr><td><a href="/api/documents/${d.id}/file" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(d.name)}</a> ${d.is_default ? '<span class="badge b-green">Par défaut</span>' : ""}</td><td>${d.type === "cv" ? "CV" : "Lettre"}</td><td>v${d.version}</td><td class="sub">${ago(d.created_at)}</td>
-          <td style="white-space:nowrap">${d.is_default ? "" : `<button class="btn btn-quiet btn-sm" data-def="${d.id}">Par défaut</button>`}<button class="btn btn-quiet btn-sm" data-ren="${d.id}">Renommer</button><button class="btn btn-quiet btn-sm" data-del="${d.id}" style="color:var(--red)">Supprimer</button></td></tr>`).join("")}
-      </tbody></table></div>` : `<div class="empty">Aucun document. Importe ton CV en PDF pour pouvoir préparer des candidatures.</div>`}
+      <h2>Ma lettre de motivation *</h2>
+      <div class="modes" role="radiogroup" aria-label="Lettre de motivation">
+        <button class="mode" data-src="document" aria-pressed="${wf.letter_source === "document"}"><b>${wf.letter_source === "document" ? "● " : ""}Ma lettre en PDF</b><span>La même lettre, importée par toi, est jointe à chaque candidature. CandiPilot ne la modifie jamais.</span></button>
+        <button class="mode" data-src="template" aria-pressed="${wf.letter_source === "template"}"><b>${wf.letter_source === "template" ? "● " : ""}Une lettre adaptée à chaque offre</b><span>CandiPilot part de ton modèle et l'adapte au poste et à l'entreprise. Tu peux la relire avant l'envoi.</span></button>
+      </div>
+      ${wf.letter_source === "document" ? slot(lettre, "lettre", "Lettre utilisée pour les candidatures") : ""}
+      ${wf.letter_source === "template" ? `<form id="tplf" class="form"><label class="f">Mon modèle de lettre<span class="hint">Variables remplacées pour chaque offre : {role}, {company}, {de_company}, {domain_line}, {domain}.</span><textarea name="letter_template" style="min-height:260px">${esc(p.letter_template)}</textarea></label>
+        <div><button class="btn btn-primary" type="submit">Enregistrer le modèle</button></div></form>` : ""}
+      ${!wf.letter_source ? '<div class="hint">Choisis une des deux options ci-dessus.</div>' : ""}
     </section>
     <section class="card pad stack">
-      <h2>Compte</h2>
-      <form id="pw" class="form two"><label class="f">Mot de passe actuel<input type="password" name="current" autocomplete="current-password" required></label>
-        <label class="f">Nouveau mot de passe<input type="password" name="new" autocomplete="new-password" minlength="8" required></label>
-        <div><button class="btn btn-ghost" type="submit">Changer le mot de passe</button></div></form>
-      <div class="spread" style="border-top:1px solid var(--line);padding-top:16px"><span class="sub" style="font-size:14px">Supprimer ton compte efface ton profil, tes documents et ton historique.</span><button class="btn btn-danger" id="delAcc">Supprimer mon compte</button></div>
+      <h2>Tous mes documents</h2>
+      ${docs.length ? `<div class="tablewrap"><table><thead><tr><th>Document</th><th>Type</th><th>Version</th><th>Ajouté</th><th></th></tr></thead><tbody>
+        ${docs.map((d) => `<tr><td><a href="/api/documents/${d.id}/file" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(d.name)}</a> ${d.is_default ? '<span class="badge b-green">Utilisé</span>' : ""}</td><td>${d.type === "cv" ? "CV" : "Lettre"}</td><td>v${d.version}</td><td class="sub">${ago(d.created_at)}</td>
+          <td style="white-space:nowrap">${d.is_default ? "" : `<button class="btn btn-quiet btn-sm" data-def="${d.id}">Utiliser</button>`}<button class="btn btn-quiet btn-sm" data-ren="${d.id}">Renommer</button><button class="btn btn-quiet btn-sm" data-del="${d.id}" style="color:var(--red)">Supprimer</button></td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">Aucun document pour l'instant.</div>`}
     </section>`);
-  document.getElementById("prf").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/profile", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Profil enregistré.").then(async () => { ME = await api("/api/auth/me"); route(); }); };
-  document.getElementById("importYaml").onclick = () => act(() => api("/api/profile/import-yaml", { method: "POST" })).then((r) => { toast("Importé : " + r.imported.join(", ") + "."); route(); });
-  document.getElementById("up").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/documents", { method: "POST", body: new FormData(e.target) }), "Document importé.").then(route); };
-  $app.querySelectorAll("[data-def]").forEach((b) => b.onclick = () => act(() => api(`/api/documents/${b.dataset.def}`, { method: "PATCH", body: { is_default: true } }), "Document par défaut mis à jour.").then(route));
+  $app.querySelectorAll(".upform").forEach((f) => f.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(f); fd.append("type", f.dataset.type);
+    const d = await act(() => api("/api/documents", { method: "POST", body: fd }));
+    if (!d.is_default) await api(`/api/documents/${d.id}`, { method: "PATCH", body: { is_default: true } });
+    toast(f.dataset.type === "cv" ? "CV importé : il sera utilisé pour tes candidatures." : "Lettre importée : elle sera utilisée pour tes candidatures.");
+    route();
+  });
+  $app.querySelectorAll("[data-src]").forEach((b) => b.onclick = () => act(() => api("/api/workflow", { method: "PUT", body: { letter_source: b.dataset.src } }), "Choix de lettre enregistré.").then(route));
+  document.getElementById("tplf")?.addEventListener("submit", (e) => { e.preventDefault(); act(() => api("/api/profile", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Modèle enregistré.").then(route); });
+  $app.querySelectorAll("[data-def]").forEach((b) => b.onclick = () => act(() => api(`/api/documents/${b.dataset.def}`, { method: "PATCH", body: { is_default: true } }), "Document sélectionné pour les candidatures.").then(route));
   $app.querySelectorAll("[data-ren]").forEach((b) => b.onclick = () => { const d = docs.find((x) => x.id === b.dataset.ren); const n = prompt("Nouveau nom :", d.name); if (n) act(() => api(`/api/documents/${d.id}`, { method: "PATCH", body: { name: n } }), "Renommé.").then(route); });
   $app.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => { if (confirm("Supprimer ce document ?")) act(() => api(`/api/documents/${b.dataset.del}`, { method: "DELETE" }), "Document supprimé.").then(route); });
-  document.getElementById("pw").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/password", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Mot de passe modifié.").then(() => e.target.reset()); };
+}
+
+// ---------- étape 4 : mode de soumission ----------
+async function modeView() {
+  const wf = await api("/api/workflow");
+  let mode = wf.submit_mode, prep = wf.want_prepare, rev = wf.want_review;
+  const yn = (name, val, q, yes, no) => `<fieldset class="yn"><legend>${q}</legend>
+    <label class="check"><input type="radio" name="${name}" value="1" ${val === 1 ? "checked" : ""}> Oui — ${yes}</label>
+    <label class="check"><input type="radio" name="${name}" value="0" ${val === 0 ? "checked" : ""}> Non — ${no}</label></fieldset>`;
+  const draw = () => {
+    shell("mode", `
+      <header class="head"><div class="titles"><h1>4. Mode de soumission</h1><p class="sub" style="margin:4px 0 0">Choisis comment tes candidatures seront envoyées. Ce choix ne déclenche aucun envoi.</p></div></header>
+      <form class="card pad stack" id="mf">
+        <div class="modes" role="radiogroup" aria-label="Mode de soumission">
+          ${wf.modes.map((m) => `<button type="button" class="mode" data-m="${m.key}" aria-pressed="${mode === m.key}"><b>${mode === m.key ? "● " : ""}${esc(m.label)}</b><span>${esc(m.help)}</span></button>`).join("")}
+        </div>
+        ${mode === "auto" ? `<div class="banner">Le robot envoie lui-même chaque candidature après ta validation finale. Les dossiers avec une question du recruteur sans réponse ne partent pas.</div>` : ""}
+        ${mode === "assisted" || mode === "manual" ? `
+          ${yn("prep", prep, "Souhaites-tu préparer ou personnaliser ta candidature ?", "je vérifie chaque dossier (lettre, CV, réponses) avant l'envoi", "CandiPilot utilise directement mes documents et informations")}
+          ${yn("rev", rev, "Souhaites-tu relire ta candidature avant l'envoi ?", "je relis chaque candidature et j'autorise son envoi", "je passe directement au récapitulatif final")}` : ""}
+        <div class="row"><button class="btn btn-primary" type="submit" ${mode ? "" : "disabled"}>Enregistrer mon choix</button>
+          ${wf.submit_mode ? `<a class="btn btn-ghost" href="#/envoi">Aller à l'étape 5 →</a>` : ""}</div>
+      </form>`);
+    $app.querySelectorAll("[data-m]").forEach((b) => b.onclick = () => { mode = b.dataset.m; draw(); });
+    $app.querySelectorAll("input[name=prep]").forEach((r) => r.onchange = () => { prep = +r.value; });
+    $app.querySelectorAll("input[name=rev]").forEach((r) => r.onchange = () => { rev = +r.value; });
+    document.getElementById("mf").onsubmit = async (e) => {
+      e.preventDefault();
+      const optional = mode !== "auto";
+      if (optional && (prep === -1 || rev === -1)) return toast("Réponds aux deux questions (Oui ou Non).", true);
+      const body = { submit_mode: mode, ...(optional ? { want_prepare: prep === 1, want_review: rev === 1 } : {}) };
+      await act(() => api("/api/workflow", { method: "PUT", body }), "Mode enregistré. Aucun envoi n'a été déclenché.");
+      route();
+    };
+  };
+  draw();
+}
+
+// ---------- étape 5 : valider l'envoi + résultat ----------
+async function sendView() {
+  const L = await api("/api/launch");
+  const R = L.results, launchedAny = R.sent.length + R.failed.length + R.progress.length + R.verify.length > 0;
+  const blocked = L.items.filter((i) => !i.ready && !i.blockers.some((b) => b.wait));
+  const waiting = L.items.filter((i) => i.blockers.some((b) => b.wait));
+  const subs = GUIDE?.steps[4]?.subs || [];
+  const global = [];
+  if (!L.mode_chosen) global.push(["Mode de soumission pas encore choisi.", "#/mode", "Choisir"]);
+  else if (L.mode !== "auto" && (L.want_prepare === -1 || L.want_review === -1)) global.push(["Réponds aux questions de préparation et de relecture.", "#/mode", "Répondre"]);
+  if (L.missing_profile.length) global.push(["Profil incomplet : " + L.missing_profile.join(", ") + ".", "#/profil", "Compléter"]);
+  if (L.missing_documents.length) global.push(["Il manque : " + L.missing_documents.join(", ") + ".", "#/documents", "Ajouter"]);
+  const yesNo = (v) => v === 1 ? "Oui" : v === 0 ? "Non" : "Pas encore répondu";
+  const blk = (b, id) => `<div class="blk${b.wait ? " wait" : ""}">${b.wait ? '<span class="spin"></span>' : "!"} ${esc(b.label)}
+    ${b.href ? `<a class="btn btn-quiet btn-sm" href="${b.href}">${esc(b.cta)}</a>` : b.action ? `<button class="btn btn-quiet btn-sm" data-act="${b.action}" data-id="${id}">${esc(b.cta)}</button>` : ""}</div>`;
+  const row = (i) => `<div class="litem">${mono(i.entreprise)}<div class="grow"><div class="t"><a href="#/candidature/${i.id}" style="color:var(--ink)">${esc(i.poste)}</a></div>
+      <div class="s">${esc(i.entreprise)} · ${esc(MODES[i.mode])} · ${i.score} % · lettre : ${i.letter_needed === 0 ? "non demandée" : i.letter_kind === "document" ? "ta lettre importée" : i.letter_kind === "generated" ? "adaptée à l'offre" : "à préparer"}</div>
+      ${i.ready ? '<div class="blk ok">✓ Prêt à partir</div>' : i.blockers.map((b) => blk(b, i.id)).join("")}
+      ${i.warnings.map((w) => `<div class="hint">ⓘ ${esc(w)}</div>`).join("")}</div>
+    <button class="btn btn-quiet btn-sm" data-unsel="${i.id}">Retirer</button></div>`;
+  const resItem = (r) => `<div class="litem">${mono(r.entreprise, 34)}<div class="grow"><div class="t"><a href="#/candidature/${r.id}" style="color:var(--ink)">${esc(r.poste)}</a> <span class="sub">· ${esc(r.entreprise)}</span></div>
+      <div class="s">${esc(r.reason)}</div>
+      ${r.actions?.length ? `<div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px">${r.actions.map((a) => a.action ? `<button class="btn btn-ghost btn-sm" data-act="${a.action}" data-id="${r.id}">${esc(a.cta)}</button>`
+        : `<a class="btn btn-ghost btn-sm" href="${esc(a.href)}" ${a.external ? 'target="_blank" rel="noopener"' : ""}>${esc(a.cta)}</a>`).join("")}</div>` : ""}</div></div>`;
+  const notSent = [...R.failed, ...(launchedAny ? blocked.map((i) => ({ ...i, reason: i.blockers.map((b) => b.label).join(" · "), actions: i.blockers.filter((b) => b.href || b.action).map((b) => ({ href: b.href, action: b.action, cta: b.cta })) })) : [])];
+  const total = R.sent.length + notSent.length + R.progress.length + R.verify.length;
+  shell("send", `
+    <header class="head"><div class="titles"><h1>5. Valider l'envoi</h1><p class="sub" style="margin:4px 0 0">Vérifie le récapitulatif : rien ne part avant que tu cliques « Valider et démarrer le robot ».</p></div></header>
+    ${global.map(([t, h, c]) => `<div class="blk big">! ${esc(t)} <a class="btn btn-primary btn-sm" href="${h}">${c}</a></div>`).join("")}
+    <section class="card pad stack">
+      <h2>Récapitulatif</h2>
+      <div class="recap">
+        <div><span class="hint">Mode de soumission</span><b>${L.mode_chosen ? esc(L.mode_label) : "Pas choisi"}</b><a href="#/mode">Modifier</a></div>
+        ${L.mode_chosen && L.mode !== "auto" ? `<div><span class="hint">Préparation / personnalisation</span><b>${yesNo(L.want_prepare)}</b><a href="#/mode">Modifier</a></div>
+          <div><span class="hint">Relecture avant envoi</span><b>${yesNo(L.want_review)}</b><a href="#/mode">Modifier</a></div>` : ""}
+        <div><span class="hint">CV</span><b>${L.cv ? esc(L.cv.name) : "Aucun"}</b><a href="#/documents">Modifier</a></div>
+        <div><span class="hint">Lettre</span><b>${L.letter_source === "document" ? (L.letter ? esc(L.letter.name) : "Lettre PDF manquante") : L.letter_source === "template" ? "Adaptée à chaque offre" : "Pas choisie"}</b><a href="#/documents">Modifier</a></div>
+      </div>
+      ${subList(subs)}
+    </section>
+    <section class="card pad stack">
+      <div class="spread"><h2>Offres sélectionnées (${L.items.length})</h2><a class="btn btn-quiet btn-sm" href="#/criteres">Ajouter des offres</a></div>
+      ${L.items.length ? L.items.map(row).join("") : `<div class="empty">Aucune offre en attente d'envoi. ${launchedAny ? "" : "Sélectionne des offres à l'étape 3."}</div>`}
+      ${L.items.length ? `<div class="launch">
+        <div class="sub" style="font-size:14px"><b style="color:var(--ink)">${L.ready_count}</b> prêt${L.ready_count > 1 ? "s" : ""} à partir${blocked.length ? ` · ${blocked.length} bloqué${blocked.length > 1 ? "s" : ""} (ne partiront pas)` : ""}${waiting.length ? ` · ${waiting.length} en préparation` : ""}</div>
+        <button class="btn btn-ai" id="doLaunch" ${L.ready_count && !global.length ? "" : "disabled"}>Valider et démarrer le robot</button></div>` : ""}
+    </section>
+    ${launchedAny ? `
+    <section class="card pad stack" id="results">
+      <div class="spread"><h2>Résultat du traitement</h2>${R.progress.length || L.busy ? '<span class="badge b-blue"><span class="spin"></span>Le robot travaille</span>' : ""}</div>
+      <div class="progress"><i style="width:${total ? (R.sent.length / total) * 100 : 0}%"></i></div>
+      <div class="grid g4">
+        ${[["Envoyées", R.sent, "b-green"], ["En cours", R.progress, "b-blue"], ["À vérifier", R.verify, "b-amber"], ["Non envoyées", notSent, "b-red"]].map(([t, xs, c]) =>
+          `<div class="card pad stat"><div class="label">${t}</div><div class="value">${xs.length}</div><span class="badge ${c}" style="align-self:flex-start">${t}</span></div>`).join("")}
+      </div>
+      ${[["Non envoyées", notSent], ["À vérifier", R.verify], ["En cours", R.progress], ["Envoyées", R.sent]].filter(([, xs]) => xs.length).map(([t, xs]) =>
+        `<h3 style="margin:8px 0 0;font-size:15px">${t}</h3>${xs.map(resItem).join("")}`).join("")}
+    </section>` : ""}`);
+  const after = (p, msg) => act(p, msg).then(route);
+  $app.querySelectorAll("[data-unsel]").forEach((b) => b.onclick = () => selectOffer(b.dataset.unsel, false));
+  $app.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => {
+    const id = b.dataset.id, a = b.dataset.act;
+    if (a === "mark-sent" && !confirm("Confirmes-tu avoir envoyé cette candidature toi-même ?")) return;
+    after(api(`/api/applications/${id}/${a}`, { method: "POST" }), { prepare: "Préparation lancée.", retry: "Dossier remis dans le récapitulatif.", verify: "Vérification lancée.", "mark-sent": "Marquée comme envoyée." }[a]);
+  });
+  document.getElementById("doLaunch")?.addEventListener("click", () => {
+    const robotN = L.items.filter((i) => i.ready && i.mode !== "manual").length, selfN = L.ready_count - robotN;
+    modal(`<h2>Valider et démarrer le robot</h2>
+      <p class="sub">${robotN ? `<b>${robotN}</b> candidature${robotN > 1 ? "s" : ""} ${L.mode === "assisted" ? "seront ouvertes et pré-remplies par le robot : tu cliqueras « Postuler maintenant »" : "seront envoyées par le robot"}.` : ""}
+        ${selfN ? `<br><b>${selfN}</b> dossier${selfN > 1 ? "s" : ""} prêt${selfN > 1 ? "s" : ""} à envoyer toi-même.` : ""}
+        ${blocked.length ? `<br>${blocked.length} dossier${blocked.length > 1 ? "s" : ""} bloqué${blocked.length > 1 ? "s" : ""} ne partira pas.` : ""}</p>
+      <p class="hint">Une candidature passe en « Envoyée » uniquement après confirmation de réception.</p>
+      <div class="row" style="justify-content:flex-end"><button class="btn btn-ghost" data-close>Annuler</button><button class="btn btn-ai" id="confirmLaunch">Confirmer le lancement</button></div>`,
+      (el, close) => el.querySelector("#confirmLaunch").onclick = () => act(() => api("/api/launch", { method: "POST" }), "Lancement validé : le robot démarre.").then(() => { close(); route(); }));
+  });
+  schedulePoll(R.progress.length || L.busy || waiting.length ? 3000 : 0);
+}
+
+// ---------- compte ----------
+async function accountView() {
+  shell("account", `
+    <header class="head"><div class="titles"><h1>Mon compte</h1><p class="sub" style="margin:4px 0 0">Connexion et sécurité.</p></div></header>
+    <section class="card pad stack"><h2>Adresse e-mail</h2>
+      <form id="em" class="form two"><label class="f">Nouvelle adresse<input type="email" name="email" value="${esc(ME.email)}" autocomplete="email" required></label>
+        <label class="f">Mot de passe actuel<input type="password" name="password" autocomplete="current-password" required></label>
+        <div><button class="btn btn-ghost" type="submit">Changer d'adresse</button></div></form></section>
+    <section class="card pad stack"><h2>Mot de passe</h2>
+      <form id="pw" class="form two"><label class="f">Mot de passe actuel<input type="password" name="current" autocomplete="current-password" required></label>
+        <label class="f">Nouveau mot de passe<input type="password" name="new" autocomplete="new-password" minlength="8" required>${PW_HINT}</label>
+        <div><button class="btn btn-ghost" type="submit">Changer le mot de passe</button></div></form></section>
+    <section class="card pad stack"><h2>Appareils connectés</h2>
+      <div class="spread"><span class="sub" style="font-size:14px">${ME.sessions} session${ME.sessions > 1 ? "s" : ""} ouverte${ME.sessions > 1 ? "s" : ""} (14 jours maximum chacune).</span>
+        <button class="btn btn-ghost" id="outAll">Se déconnecter partout</button></div></section>
+    <section class="card pad stack"><h2>Supprimer mon compte</h2>
+      <div class="spread"><span class="sub" style="font-size:14px">Efface ton profil, tes documents et ton historique.</span><button class="btn btn-danger" id="delAcc">Supprimer mon compte</button></div></section>`);
+  document.getElementById("em").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/email", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Adresse modifiée.").then(async () => { ME = await api("/api/auth/me"); route(); }); };
+  document.getElementById("pw").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/password", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Mot de passe modifié. Tes autres appareils sont déconnectés.").then(async () => { e.target.reset(); ME = await api("/api/auth/me"); route(); }); };
+  document.getElementById("outAll").onclick = () => { if (confirm("Te déconnecter de tous les appareils, y compris celui-ci ?")) act(() => api("/api/auth/logout-all", { method: "POST" })).then(() => { ME = null; GUIDE = null; go("#/login"); }); };
   document.getElementById("delAcc").onclick = () => modal(`<h2>Supprimer mon compte</h2><p class="sub">Action définitive. Saisis ton mot de passe pour confirmer.</p>
     <form id="da" class="form"><input type="password" name="password" required autocomplete="current-password" aria-label="Mot de passe">
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn btn-ghost" data-close>Annuler</button><button class="btn btn-danger" type="submit">Supprimer définitivement</button></div></form>`,
-    (el) => el.querySelector("#da").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/account", { method: "DELETE", body: Object.fromEntries(new FormData(e.target)) }), "Compte supprimé.").then(() => { ME = null; el.remove(); go("#/register"); }); });
+    (el) => el.querySelector("#da").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/account", { method: "DELETE", body: Object.fromEntries(new FormData(e.target)) }), "Compte supprimé.").then(() => { ME = null; GUIDE = null; el.remove(); go("#/register"); }); });
 }
 
 // ---------- routeur ----------
 function schedulePoll(ms) {
   clearTimeout(pollTimer);
+  pollMs = ms;
   if (ms) pollTimer = setTimeout(() => { if (!document.querySelector(".scrim") && !document.activeElement?.matches("input,textarea,select")) route(); else schedulePoll(ms); }, ms);
 }
 
 async function route() {
   clearTimeout(pollTimer);
-  const h = location.hash || "#/";
-  if (h === "#/login" || h === "#/register") return authView(h.slice(2));
-  if (!ME) { try { ME = await api("/api/auth/me"); } catch { return go("#/login"); } }
+  pollMs = 0;
+  const h = (location.hash || "#/").split("?")[0];
+  const pub = { "#/login": () => authView("login"), "#/register": () => authView("register"), "#/mot-de-passe-oublie": forgotView, "#/reinitialiser": resetView };
+  if (pub[h]) return pub[h]();
+  if (!ME) { try { ME = await api("/api/auth/me"); } catch { sessionStorage.setItem("cp_next", location.hash || "#/"); return go("#/login"); } }
   try {
-    if (h !== "#/" && h !== "#/a-valider") navBadge = (await api("/api/applications?statut=a_valider")).length;
+    GUIDE = await api("/api/guide");
     const m = h.match(/^#\/candidature\/([\w-]+)$/);
-    if (m) return await applicationView(m[1]);
-    const views = { "#/": dashboardView, "#/a-valider": toValidateView, "#/candidatures": applicationsView, "#/offres": offersView, "#/criteres": prefsView, "#/profil": profileView };
-    await (views[h] || dashboardView)();
+    const views = { "#/": dashboardView, "#/envoi": sendView, "#/a-valider": sendView, "#/candidatures": applicationsView, "#/offres": offersView,
+      "#/criteres": prefsView, "#/profil": profileView, "#/documents": documentsView, "#/mode": modeView, "#/compte": accountView };
+    await (m ? applicationView(m[1]) : (views[h] || dashboardView)());
+    if (!pollMs && (GUIDE.steps.some((s) => s.waiting) || GUIDE.next?.waiting)) schedulePoll(4000);
   } catch (e) { if (ME) toast(e.message, true); }
 }
 

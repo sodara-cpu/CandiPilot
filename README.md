@@ -143,7 +143,27 @@ Interface de la maquette CandiPilot branchée sur le robot (dossier `app/`).
 ```bash
 ./start.sh                                  # puis ouvrir http://127.0.0.1:8000
 CANDIPILOT_FAKE_ROBOT=1 ./start.sh          # démonstration : robot simulé, aucun envoi réel
+./deploy.sh                                 # production (branche main) : lien https public
+./deploy.sh recette                         # recette (branche develop) : robot simulé, port 8001
 ```
+
+`deploy.sh` (nécessite `brew install cloudflared`) affiche une adresse `https://….trycloudflare.com`.
+Le lien fonctionne tant que le script tourne sur le Mac, et change à chaque lancement.
+« Mot de passe oublié » envoie un e-mail si `CANDIPILOT_SMTP_HOST` (+ `_PORT`, `_USER`, `_PASSWORD`, `_FROM`)
+est défini ; sinon le lien est écrit dans `data/server.log`.
+
+### Parcours du candidat (5 étapes)
+
+1. **Profil** — prénom, nom, téléphone, disponibilité, genre obligatoires.
+2. **CV et lettre** — CV PDF + lettre PDF importée (jamais modifiée) *ou* lettre adaptée à chaque offre.
+3. **Critères et offres** — recherche (aucun envoi), puis sélection des offres ; la sélection lance la préparation technique.
+4. **Mode de soumission** — Automatique (le robot envoie), Assisté (le robot pré-remplit, tu cliques « Postuler »),
+   Semi-assisté (tu postules toi-même). En Assisté / Semi-assisté : « préparer ? » et « relire ? » (Oui / Non).
+5. **Valider l'envoi** — récapitulatif, blocages, puis « Valider et démarrer le robot » : le seul bouton qui envoie.
+   Résultat : Envoyées / En cours / À vérifier / Non envoyées (avec raison et action).
+
+Tests (robot simulé) : `./tests/run_all.sh` (lancés aussi par GitHub Actions à chaque push).
+Architecture de déploiement, environnements et branches : [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
 - **Compte** : inscription, connexion, déconnexion, changement de mot de passe, suppression
   (mots de passe PBKDF2, session par cookie HttpOnly, limite anti-force brute).

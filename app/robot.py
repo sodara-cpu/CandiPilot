@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import yaml
@@ -99,6 +100,15 @@ def render_letter(ctx: dict, offer: dict, text: str, app_id: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "_", f"{offer['entreprise']}_{offer['poste']}").strip("_")[:60]
     out = LETTERS_DIR / app_id / f"Lettre_{slug}.pdf"
     make_pdf(text, out, candidate_dict(ctx))
+    return str(out)
+
+
+def copy_letter(doc, app_id: str) -> str:
+    """Copie la lettre importée dans le dossier de la candidature, sous son nom d'origine (vu par le recruteur)."""
+    name = re.sub(r"[^\w.\- ]+", "_", Path(doc["name"]).name) or "Lettre.pdf"
+    out = LETTERS_DIR / app_id / (name if name.lower().endswith(".pdf") else name + ".pdf")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(doc["chemin"], out)
     return str(out)
 
 

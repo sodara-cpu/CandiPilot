@@ -120,6 +120,12 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_app_user ON applications(user_id, statut);
 CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_statut ON jobs(statut, created_at);
@@ -156,9 +162,32 @@ def tx():
         conn.close()
 
 
+# Colonnes ajoutées après la première version : ajoutées aux bases existantes au démarrage.
+MIGRATIONS = {
+    "preferences": {
+        "mode_chosen": "INTEGER DEFAULT 0",       # le candidat a choisi son mode (étape 4)
+        "want_prepare": "INTEGER DEFAULT -1",     # personnaliser les dossiers : -1 non répondu, 0 non, 1 oui
+        "want_review": "INTEGER DEFAULT -1",      # relire chaque dossier avant l'envoi
+        "letter_source": "TEXT DEFAULT ''",       # document (lettre PDF importée) | template (modèle adapté)
+    },
+    "applications": {
+        "selected": "INTEGER DEFAULT 0",          # offre choisie par le candidat (étape 3)
+        "letter_kind": "TEXT DEFAULT ''",         # document | generated
+        "customized": "INTEGER DEFAULT 0",        # dossier vérifié/personnalisé par le candidat
+        "reviewed": "INTEGER DEFAULT 0",          # relu et autorisé à l'envoi
+        "launched": "INTEGER DEFAULT 0",          # inclus dans un lancement « Valider et démarrer »
+    },
+}
+
+
 def init() -> None:
     with tx() as c:
         c.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+            for col, decl in cols.items():
+                if col not in have:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         # Un worker arrêté en pleine tâche : on la remet en file au démarrage.
         c.execute("UPDATE jobs SET statut='en_attente' WHERE statut='en_cours'")
 

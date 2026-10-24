@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, matching, robot, worker
+from . import auth, db, matching, robot, worker, workflow
 
 STATIC = Path(__file__).parent / "static"
 UPLOADS = db.DATA_DIR / "uploads"
@@ -68,11 +68,25 @@ class DeleteAccountIn(BaseModel):
     password: str
 
 
+class ForgotIn(BaseModel):
+    email: str
+
+
+class ResetIn(BaseModel):
+    token: str
+    password: str
+
+
+class EmailIn(BaseModel):
+    email: str
+    password: str
+
+
 @app.post("/api/auth/register", status_code=201)
 def register(body: RegisterIn, request: Request, response: Response):
     email = body.email.strip().lower()
     auth.check_credentials_format(email, body.password)
-    auth.rate_limit(f"register:{request.client.host if request.client else ''}")
+    auth.rate_limit(f"register:{auth.client_ip(request)}")
     uid = db.new_id()
     with db.tx() as c:
         if c.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
@@ -92,7 +106,7 @@ def register(body: RegisterIn, request: Request, response: Response):
 @app.post("/api/auth/login")
 def login(body: LoginIn, request: Request, response: Response):
     email = body.email.strip().lower()
-    auth.rate_limit(f"login:{request.client.host if request.client else ''}:{email}")
+    auth.rate_limit(f"login:{auth.client_ip(request)}:{email}")
     with db.tx() as c:
         u = c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if not u or not auth.verify_password(body.password, u["password_hash"]):
@@ -111,21 +125,87 @@ def logout(request: Request, response: Response):
     if token:
         with db.tx() as c:
             c.execute("DELETE FROM sessions WHERE token=?", (token,))
-    response.delete_cookie(auth.COOKIE, path="/")
+    auth.clear_session_cookie(response)
     return {"ok": True}
+
+
+@app.post("/api/auth/logout-all")
+def logout_all(response: Response, user=CurrentUser):
+    """Déconnecte tous les appareils, y compris celui-ci."""
+    with db.tx() as c:
+        c.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+    auth.clear_session_cookie(response)
+    return {"ok": True}
+
+
+@app.post("/api/auth/forgot", status_code=202)
+def forgot_password(body: ForgotIn, request: Request):
+    """Envoie un lien de réinitialisation. Réponse identique que le compte existe ou non."""
+    email = body.email.strip().lower()
+    auth.rate_limit(f"forgot:{auth.client_ip(request)}")
+    with db.tx() as c:
+        u = c.execute("SELECT id FROM users WHERE email=? AND statut='actif'", (email,)).fetchone()
+        token = auth.create_reset(c, u["id"]) if u else None
+    if token:
+        base = auth.PUBLIC_URL or str(request.base_url).rstrip("/")
+        link = f"{base}/#/reinitialiser?token={token}"
+        try:
+            auth.send_mail(email, "CandiPilot : réinitialise ton mot de passe",
+                           f"Bonjour,\n\nPour choisir un nouveau mot de passe, ouvre ce lien (valable {auth.RESET_MINUTES} minutes) :\n{link}\n\n"
+                           "Si tu n'es pas à l'origine de cette demande, ignore ce message.\n\nCandiPilot")
+        except Exception as e:
+            print(f"[e-mail] échec de l'envoi à {email} : {e}", flush=True)
+    return {"ok": True}
+
+
+@app.post("/api/auth/reset")
+def reset_password(body: ResetIn, request: Request, response: Response):
+    auth.rate_limit(f"reset:{auth.client_ip(request)}")
+    auth.check_password_strength(body.password)
+    with db.tx() as c:
+        uid = auth.consume_reset(c, body.token)
+        c.execute("UPDATE users SET password_hash=? WHERE id=?", (auth.hash_password(body.password), uid))
+        c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        db.add_event(c, uid, "info", "Mot de passe réinitialisé. Les autres appareils ont été déconnectés.")
+        token = auth.create_session(c, uid)
+    auth.set_cookie(response, token)
+    return {"ok": True}
+
+
+@app.put("/api/auth/email")
+def change_email(body: EmailIn, user=CurrentUser):
+    email = body.email.strip().lower()
+    if not auth.EMAIL_RE.match(email):
+        raise HTTPException(422, "Adresse e-mail invalide.")
+    with db.tx() as c:
+        h = c.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],)).fetchone()["password_hash"]
+        if not auth.verify_password(body.password, h):
+            raise HTTPException(401, "Mot de passe incorrect.")
+        if c.execute("SELECT 1 FROM users WHERE email=? AND id<>?", (email, user["id"])).fetchone():
+            raise HTTPException(409, "Un compte existe déjà avec cette adresse.")
+        c.execute("UPDATE users SET email=? WHERE id=?", (email, user["id"]))
+    return {"email": email}
+
+
+def _is_owner(c, uid: str) -> bool:
+    """Le premier compte créé est celui du propriétaire du robot (config/profile.yaml)."""
+    first = c.execute("SELECT id FROM users ORDER BY created_at, rowid LIMIT 1").fetchone()
+    return bool(first) and first["id"] == uid
 
 
 @app.get("/api/auth/me")
 def me(user=CurrentUser):
     with db.tx() as c:
         p = db.row(c.execute("SELECT first_name, last_name FROM profiles WHERE user_id=?", (user["id"],)).fetchone())
-    return {**user, **(p or {})}
+        owner = _is_owner(c, user["id"])
+        n_sessions = c.execute("SELECT COUNT(*) n FROM sessions WHERE user_id=? AND expires_at>?",
+                               (user["id"], db.now())).fetchone()["n"]
+    return {**user, **(p or {}), "owner": owner, "sessions": n_sessions}
 
 
 @app.put("/api/auth/password")
 def change_password(body: PasswordIn, request: Request, user=CurrentUser):
-    if len(body.new) < 8:
-        raise HTTPException(422, "Le nouveau mot de passe doit contenir au moins 8 caractères.")
+    auth.check_password_strength(body.new)
     token = request.cookies.get(auth.COOKIE)
     with db.tx() as c:
         h = c.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],)).fetchone()["password_hash"]
@@ -187,16 +267,20 @@ def get_profile(user=CurrentUser):
 def put_profile(body: ProfileIn, user=CurrentUser):
     if body.gender and body.gender.lower() not in ("homme", "femme", "autre"):
         raise HTTPException(422, "Genre : Homme, Femme ou Autre.")
-    data = body.dict()
-    with db.tx() as c:
-        c.execute(f"UPDATE profiles SET {', '.join(f'{k}=?' for k in PROFILE_FIELDS)} WHERE user_id=?",
-                  (*[data[k].strip() for k in PROFILE_FIELDS], user["id"]))
+    # Seuls les champs envoyés sont modifiés (le modèle de lettre se règle sur la page Documents).
+    data = {k: v for k, v in body.dict(exclude_unset=True).items() if k in PROFILE_FIELDS}
+    if data:
+        with db.tx() as c:
+            c.execute(f"UPDATE profiles SET {', '.join(f'{k}=?' for k in data)} WHERE user_id=?",
+                      (*[v.strip() for v in data.values()], user["id"]))
     return get_profile(user)
 
 
 @app.post("/api/profile/import-yaml")
 def import_yaml(user=CurrentUser):
     with db.tx() as c:
+        if not _is_owner(c, user["id"]):
+            raise HTTPException(403, "Réservé au propriétaire du robot.")
         done = robot.import_yaml(c, user["id"])
         if done:
             db.add_event(c, user["id"], "info", "Importé depuis config/profile.yaml : " + ", ".join(done) + ".")
@@ -299,7 +383,7 @@ class PreferencesIn(BaseModel):
     max_pages: int = Field(3, ge=1, le=10)
     include_external: bool = False
     min_score: int = Field(50, ge=0, le=100)
-    default_mode: str = "auto"
+    default_mode: Optional[str] = None     # se choisit à l'étape 4 (PUT /api/workflow)
     search_every_hours: int = Field(24, ge=1, le=168)
 
 
@@ -320,7 +404,7 @@ def get_preferences(user=CurrentUser):
 
 @app.put("/api/preferences")
 def put_preferences(body: PreferencesIn, user=CurrentUser):
-    if body.default_mode not in ("auto", "assisted", "manual"):
+    if body.default_mode is not None and body.default_mode not in ("auto", "assisted", "manual"):
         raise HTTPException(422, "Mode : auto, assisted ou manual.")
     if body.start_from:
         try:
@@ -330,7 +414,8 @@ def put_preferences(body: PreferencesIn, user=CurrentUser):
     clean = lambda xs: [x.strip() for x in xs if x.strip()]
     with db.tx() as c:
         c.execute("""UPDATE preferences SET metiers=?, zones=?, contrats=?, start_from=?, max_pages=?,
-                     include_external=?, min_score=?, default_mode=?, search_every_hours=? WHERE user_id=?""",
+                     include_external=?, min_score=?, default_mode=COALESCE(?, default_mode), search_every_hours=?
+                     WHERE user_id=?""",
                   (json.dumps(clean(body.metiers), ensure_ascii=False), json.dumps(clean(body.zones), ensure_ascii=False),
                    json.dumps(clean(body.contrats), ensure_ascii=False), body.start_from, body.max_pages,
                    int(body.include_external), body.min_score, body.default_mode, body.search_every_hours, user["id"]))
@@ -389,7 +474,7 @@ def _rescore(c, uid: str) -> None:
 
 @app.get("/api/offers")
 def list_offers(q: str = "", min_score: int = 0, user=CurrentUser):
-    sql = """SELECT o.*, a.id AS application_id, a.statut FROM offers o
+    sql = """SELECT o.*, a.id AS application_id, a.statut, a.selected, a.launched FROM offers o
              LEFT JOIN applications a ON a.offer_id=o.id WHERE o.user_id=? AND o.score>=?"""
     args = [user["id"], min_score]
     if q:
@@ -461,8 +546,11 @@ class QuestionIn(BaseModel):
 class ApplicationIn(BaseModel):
     mode: Optional[str] = None
     letter_text: Optional[str] = None
+    letter_kind: Optional[str] = None      # document : lettre importée | generated : lettre adaptée à l'offre
     cv_document_id: Optional[str] = None
     questions: Optional[List[QuestionIn]] = None
+    customized: Optional[bool] = None      # « J'ai vérifié ce dossier »
+    reviewed: Optional[bool] = None        # « Autoriser l'envoi » après relecture
 
 
 APP_SQL = """SELECT a.*, o.url, o.poste, o.entreprise, o.localisation, o.contrat, o.domaine, o.start_date,
@@ -521,6 +609,12 @@ def get_application(app_id: str, user=CurrentUser):
         a["readiness"] = _readiness(c, a, user["id"])
         a["job"] = db.row(c.execute("""SELECT type, statut, progress FROM jobs WHERE application_id=?
                                        ORDER BY created_at DESC LIMIT 1""", (app_id,)).fetchone())
+        pr = workflow.prefs(c, user["id"])
+        a["flow"] = workflow.flow(pr, a["mode"])
+        raw = dict(a, questions=json.dumps(a["questions"]))
+        a["blockers"], a["warnings"] = workflow.blockers(c, raw, user["id"], pr)
+        lettre = workflow.default_doc(c, user["id"], "lettre")
+        a["imported_letter"] = {"id": lettre["id"], "name": lettre["name"]} if lettre else None
     return a
 
 
@@ -550,6 +644,33 @@ def update_application(app_id: str, body: ApplicationIn, user=CurrentUser):
             ctx = robot.load_context(c, user["id"])
             fields["letter_text"] = body.letter_text.strip()
             fields["letter_path"] = robot.render_letter(ctx, a, body.letter_text.strip(), app_id)
+            fields["letter_kind"] = "generated"
+        elif body.letter_kind is not None and body.letter_kind != a["letter_kind"]:
+            if body.letter_kind == "document":
+                doc = workflow.default_doc(c, user["id"], "lettre")
+                if not doc:
+                    raise HTTPException(422, "Aucune lettre importée : ajoute-la dans « Documents ».")
+                fields.update(letter_kind="document", letter_path=robot.copy_letter(doc, app_id), letter_text="")
+            elif body.letter_kind == "generated":
+                ctx = robot.load_context(c, user["id"])
+                text = robot.draft_letter(ctx, a)
+                fields.update(letter_kind="generated", letter_text=text,
+                              letter_path=robot.render_letter(ctx, a, text, app_id))
+            else:
+                raise HTTPException(422, "Lettre : document ou generated.")
+        if fields:
+            fields["reviewed"] = 0      # Un dossier modifié doit être relu à nouveau.
+        if body.customized is not None:
+            fields["customized"] = int(body.customized)
+        if body.reviewed is not None:
+            if body.reviewed:
+                pr = workflow.prefs(c, user["id"])
+                b, _ = workflow.blockers(c, dict(a, questions=json.dumps(a["questions"]), customized=fields.get("customized", a["customized"])),
+                                         user["id"], pr)
+                b = [x for x in b if x.get("optional") != "review"]
+                if b:
+                    raise HTTPException(422, "Dossier incomplet : " + " ; ".join(x["label"] for x in b))
+            fields["reviewed"] = int(body.reviewed)
         if fields:
             fields["updated_at"] = db.now()
             c.execute(f"UPDATE applications SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
@@ -575,7 +696,7 @@ def prepare(app_id: str, user=CurrentUser):
             raise HTTPException(409, "Cette candidature ne peut plus être préparée.")
         if not robot.default_cv(c, user["id"]):
             raise HTTPException(422, "Ajoute d'abord un CV (PDF) dans ton profil.")
-        c.execute("UPDATE applications SET statut='preparation', updated_at=? WHERE id=?", (db.now(), app_id))
+        c.execute("UPDATE applications SET statut='preparation', selected=1, updated_at=? WHERE id=?", (db.now(), app_id))
         jid = worker.enqueue(c, user["id"], "prepare", app_id)
     return {"job_id": jid}
 
@@ -595,7 +716,8 @@ def validate(app_id: str, user=CurrentUser):
                            AND a.statut IN ('soumission','confirmee') AND a.id<>?""", (user["id"], a["url"], app_id)).fetchone()
         if dup:
             raise HTTPException(409, "Candidature déjà envoyée pour cette offre.")
-        c.execute("UPDATE applications SET statut='soumission', updated_at=? WHERE id=?", (db.now(), app_id))
+        c.execute("UPDATE applications SET statut='soumission', selected=1, launched=1, updated_at=? WHERE id=?",
+                  (db.now(), app_id))
         db.add_event(c, user["id"], "info", f"Candidature validée : {a['entreprise']} (envoi {'automatique' if a['mode'] == 'auto' else 'assisté'}).", app_id)
         jid = worker.enqueue(c, user["id"], "submit", app_id)
     return {"job_id": jid}
@@ -603,7 +725,7 @@ def validate(app_id: str, user=CurrentUser):
 
 @app.post("/api/applications/{app_id}/ignore")
 def ignore(app_id: str, user=CurrentUser):
-    _transition(app_id, user["id"], ("decouverte", "qualifiee", "a_valider", "echec", "incertaine"), statut="ignoree")
+    _transition(app_id, user["id"], ("decouverte", "qualifiee", "a_valider", "echec", "incertaine"), statut="ignoree", selected=0)
     return get_application(app_id, user)
 
 
@@ -617,7 +739,9 @@ def restore(app_id: str, user=CurrentUser):
 def retry(app_id: str, user=CurrentUser):
     with db.tx() as c:
         a = _app_or_404(c, app_id, user["id"])
-    _transition(app_id, user["id"], ("echec",), statut="a_valider" if a["letter_path"] else "qualifiee", detail="")
+    # Le dossier revient dans le récapitulatif : il ne repart qu'après « Valider et démarrer le robot ».
+    _transition(app_id, user["id"], ("echec",), statut="a_valider" if a["letter_path"] else "qualifiee", detail="",
+                selected=1, launched=0)
     return get_application(app_id, user)
 
 
@@ -666,6 +790,118 @@ def application_letter(app_id: str, user=CurrentUser):
 
 def _iso_week(d: datetime) -> str:
     return f"S{d.isocalendar()[1]:02d}"
+
+
+@app.get("/api/guide")
+def guide(user=CurrentUser):
+    """Parcours du candidat : cinq étapes, éléments manquants, sous-étapes facultatives."""
+    with db.tx() as c:
+        return workflow.guide(c, user["id"])
+
+
+# ===================== Parcours : mode de soumission, sélection, lancement =====================
+
+class WorkflowIn(BaseModel):
+    submit_mode: Optional[str] = None       # auto | assisted | manual
+    want_prepare: Optional[bool] = None
+    want_review: Optional[bool] = None
+    letter_source: Optional[str] = None     # document | template
+
+
+@app.get("/api/workflow")
+def get_workflow(user=CurrentUser):
+    with db.tx() as c:
+        pr = workflow.prefs(c, user["id"])
+    return {"submit_mode": pr["default_mode"] if pr["mode_chosen"] else "", "want_prepare": pr["want_prepare"],
+            "want_review": pr["want_review"], "letter_source": pr["letter_source"],
+            "modes": [{"key": k, "label": l, "help": h} for k, (l, h) in workflow.MODES.items()]}
+
+
+@app.put("/api/workflow")
+def put_workflow(body: WorkflowIn, user=CurrentUser):
+    """Enregistre les choix du parcours. Ne déclenche jamais d'envoi."""
+    uid = user["id"]
+    with db.tx() as c:
+        if body.submit_mode is not None:
+            if body.submit_mode not in workflow.MODES:
+                raise HTTPException(422, "Mode : auto, assisted ou manual.")
+            c.execute("UPDATE preferences SET default_mode=?, mode_chosen=1 WHERE user_id=?", (body.submit_mode, uid))
+            # Dossiers pas encore lancés : nouveau mode (les offres externes restent en semi-assisté).
+            c.execute("""UPDATE applications SET mode=?, reviewed=0, updated_at=? WHERE user_id=? AND launched=0
+                         AND statut IN ('decouverte','qualifiee','preparation','a_valider','echec')
+                         AND offer_id IN (SELECT id FROM offers WHERE apply_type='jobteaser')""",
+                      (body.submit_mode, db.now(), uid))
+        if body.want_prepare is not None:
+            c.execute("UPDATE preferences SET want_prepare=? WHERE user_id=?", (int(body.want_prepare), uid))
+        if body.want_review is not None:
+            c.execute("UPDATE preferences SET want_review=? WHERE user_id=?", (int(body.want_review), uid))
+        if body.letter_source is not None:
+            if body.letter_source not in ("document", "template"):
+                raise HTTPException(422, "Lettre : document ou template.")
+            c.execute("UPDATE preferences SET letter_source=? WHERE user_id=?", (body.letter_source, uid))
+    return get_workflow(user)
+
+
+class SelectIn(BaseModel):
+    selected: bool
+
+
+@app.post("/api/applications/{app_id}/select")
+def select_application(app_id: str, body: SelectIn, user=CurrentUser):
+    """Coche une offre pour le prochain lancement ; lance sa préparation technique (aucun envoi)."""
+    uid = user["id"]
+    with db.tx() as c:
+        a = _app_or_404(c, app_id, uid)
+        if a["statut"] in ("soumission", "confirmee") or (a["launched"] and not body.selected):
+            raise HTTPException(409, "Candidature déjà lancée : elle ne peut plus être retirée.")
+        if not body.selected:
+            c.execute("UPDATE applications SET selected=0, updated_at=? WHERE id=?", (db.now(), app_id))
+        else:
+            statut = "qualifiee" if a["statut"] == "ignoree" else a["statut"]
+            c.execute("UPDATE applications SET selected=1, statut=?, updated_at=? WHERE id=?", (statut, db.now(), app_id))
+            if statut in ("decouverte", "qualifiee") and robot.default_cv(c, uid):
+                c.execute("UPDATE applications SET statut='preparation' WHERE id=?", (app_id,))
+                worker.enqueue(c, uid, "prepare", app_id)
+    return get_application(app_id, user)
+
+
+@app.get("/api/launch")
+def get_launch(user=CurrentUser):
+    with db.tx() as c:
+        return workflow.launch_state(c, user["id"])
+
+
+@app.post("/api/launch", status_code=202)
+def launch(user=CurrentUser):
+    """« Valider et démarrer le robot » : seul point d'envoi du parcours. N'envoie que les dossiers sans blocage."""
+    uid = user["id"]
+    with db.tx() as c:
+        pr = workflow.prefs(c, uid)
+        if not pr["mode_chosen"]:
+            raise HTTPException(422, "Choisis d'abord ton mode de soumission (étape 4).")
+        if pr["default_mode"] in ("assisted", "manual") and -1 in (pr["want_prepare"], pr["want_review"]):
+            raise HTTPException(422, "Réponds aux deux questions de l'étape 4 (préparation et relecture).")
+        if workflow.missing_documents(c, uid, pr):
+            raise HTTPException(422, "Il manque : " + ", ".join(workflow.missing_documents(c, uid, pr)) + ".")
+        mprof = workflow.missing_profile(c, uid)
+        started, manual, skipped = [], [], 0
+        for a in workflow.pending(c, uid):
+            b, _ = workflow.blockers(c, a, uid, pr, mprof)
+            if b:
+                skipped += 1
+                continue
+            if a["mode"] == "manual":
+                c.execute("UPDATE applications SET launched=1, updated_at=? WHERE id=?", (db.now(), a["id"]))
+                manual.append(a["id"])
+                continue
+            c.execute("UPDATE applications SET statut='soumission', launched=1, updated_at=? WHERE id=?", (db.now(), a["id"]))
+            worker.enqueue(c, uid, "submit", a["id"])
+            started.append(a["id"])
+        if not started and not manual:
+            raise HTTPException(409, "Aucun dossier prêt : résous les blocages indiqués dans le récapitulatif.")
+        db.add_event(c, uid, "info", f"Lancement validé : {len(started)} envoi(s) par le robot, "
+                                     f"{len(manual)} à envoyer toi-même, {skipped} dossier(s) bloqué(s) non envoyé(s).")
+    return {"started": len(started), "manual": len(manual), "skipped": skipped}
 
 
 @app.get("/api/dashboard")

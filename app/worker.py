@@ -119,16 +119,27 @@ def run_prepare(job: dict) -> None:
         cv = robot.default_cv(c, uid)
         _set_app(c, app_id, statut="preparation", cv_document_id=a["cv_document_id"] or (cv["id"] if cv else ""))
 
-    text = a["letter_text"] or robot.draft_letter(ctx, a)
-    _progress(job["id"], "Lettre adaptée générée")
-    pdf = robot.render_letter(ctx, a, text, app_id)
+    # Lettre : celle importée par le candidat si c'est son choix (jamais remplacée sans lui),
+    # sinon une lettre adaptée à l'offre à partir de son modèle.
+    with db.tx() as c:
+        source = c.execute("SELECT letter_source FROM preferences WHERE user_id=?", (uid,)).fetchone()["letter_source"]
+        doc = c.execute("""SELECT chemin, name FROM documents WHERE user_id=? AND type='lettre'
+                           ORDER BY is_default DESC, created_at DESC LIMIT 1""", (uid,)).fetchone()
+    kind = a["letter_kind"] or ("document" if source == "document" else "generated")
+    if kind == "document":
+        text, pdf = "", robot.copy_letter(doc, app_id) if doc else ""
+        _progress(job["id"], "Lettre importée sélectionnée" if doc else "Lettre importée introuvable")
+    else:
+        text = a["letter_text"] or robot.draft_letter(ctx, a)
+        _progress(job["id"], "Lettre adaptée générée")
+        pdf = robot.render_letter(ctx, a, text, app_id)
 
     info = _inspect(a, ctx, job["id"])
     with db.tx() as c:
         questions = db.jload(a["questions"], [])
         known = {q["label"]: q.get("answer", "") for q in questions}
         questions = [{"label": l, "answer": known.get(l, "")} for l in info["questions"]]
-        fields = dict(letter_text=text, letter_path=pdf, questions=json.dumps(questions, ensure_ascii=False),
+        fields = dict(letter_text=text, letter_path=pdf, letter_kind=kind, questions=json.dumps(questions, ensure_ascii=False),
                       letter_needed=int(info["letter"]) if info["kind"] == "easy" else -1, detail=info["detail"])
         if info["kind"] == "already":
             fields.update(statut="confirmee", preuve="JobTeaser : « Vous avez postulé à cette offre »",
