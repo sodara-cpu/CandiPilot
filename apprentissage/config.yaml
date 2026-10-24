@@ -1,0 +1,15 @@
+# Collecte des pages de sites carrières (python collecte.py).
+# Ajoute ici les sites à étudier. Vérifie avant que leurs conditions d'utilisation autorisent la lecture automatique.
+
+delai_secondes: 5          # pause entre deux pages d'un même site
+pages_max_par_site: 20
+profondeur_max: 2          # nombre de clics maximum depuis l'adresse de départ
+navigateur_visible: false  # true si le site bloque les navigateurs invisibles
+
+# Un lien n'est suivi que si son adresse ou son texte contient un de ces mots.
+mots_cles_liens: [career, carriere, carrière, job, emploi, offre, offer, apply, postuler, candidat, stage, intern]
+
+sites: []
+# Exemple :
+#   - nom: Exemple Greenhouse
+#     url: https://boards.greenhouse.io/<entreprise>

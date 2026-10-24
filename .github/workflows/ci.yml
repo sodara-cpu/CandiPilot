@@ -26,3 +26,23 @@ jobs:
         run: cp config/profile.example.yaml config/profile.yaml
       - name: Tests (API, parcours, interface)
         run: PY=python ./tests/run_all.sh
+
+  apprentissage:
+    # Mini-projet de deep learning : sites générés en local, aucun vrai site visité.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Dépendances (PyTorch version processeur)
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r apprentissage/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Tests
+        run: |
+          python apprentissage/tests/test_apprentissage.py
+          python apprentissage/tests/test_autonome.py

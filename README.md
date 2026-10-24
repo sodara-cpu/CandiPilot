@@ -179,3 +179,9 @@ Architecture de déploiement, environnements et branches : [docs/DEPLOIEMENT.md]
 - API documentée : http://127.0.0.1:8000/api/docs
 - Tests : `tests/test_api.py` (62 vérifications) et `tests/test_ui.py`, avec un serveur lancé en
   robot simulé (`CANDIPILOT_FAKE_ROBOT=1 CANDIPILOT_DATA=/tmp/cp`).
+
+## Mini-projet « apprentissage » (deep learning)
+
+Le dossier [apprentissage/](apprentissage/README.md) contient un projet séparé : des réseaux de neurones
+qui explorent les sites carrières et apprennent seuls la structure de leurs formulaires.
+Il n'est pas encore branché sur l'application.
