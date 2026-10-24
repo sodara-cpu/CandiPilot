@@ -1,12 +1,18 @@
-"""Base SQLite de CandiPilot (modèle du dossier de conception, §3.2).
+"""Base de données de CandiPilot (modèle du dossier de conception, §3.2).
 
-Une connexion par appel : SQLite gère les accès concurrents du serveur web et
-du worker du robot (mode WAL).
+- SQLite par défaut (poste local, tests) : data/candipilot.db, mode WAL.
+- PostgreSQL si DATABASE_URL est défini (hébergement Render).
+
+Le code écrit ses requêtes une seule fois, en syntaxe SQLite ; pour PostgreSQL elles sont
+traduites à la volée (paramètres ?, INSERT OR IGNORE, LIKE insensible à la casse…).
+Le contenu des fichiers (CV, lettres) est stocké dans la table files : le disque d'un
+hébergeur peut être effacé à chaque déploiement.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -17,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # CANDIPILOT_DATA permet d'isoler une base de test ou de démonstration.
 DATA_DIR = Path(os.environ.get("CANDIPILOT_DATA") or ROOT / "data")
 DB_PATH = DATA_DIR / "candipilot.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 # Cycle de vie d'une candidature (§3.4).
 STATUSES = ["decouverte", "qualifiee", "a_valider", "preparation", "soumission",
@@ -102,7 +110,7 @@ CREATE TABLE IF NOT EXISTS applications (
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,  -- SERIAL en PostgreSQL
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,              -- info | success | warning | error
   message TEXT NOT NULL,
@@ -119,6 +127,20 @@ CREATE TABLE IF NOT EXISTS jobs (
   progress TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS files (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  contenu BLOB NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  last_seen TEXT DEFAULT '',
+  version TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS password_resets (
   token_hash TEXT PRIMARY KEY,
@@ -140,7 +162,50 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
-def connect() -> sqlite3.Connection:
+# ---------- PostgreSQL : traduction des requêtes écrites pour SQLite ----------
+
+def _pg_sql(sql: str) -> str:
+    sql = sql.replace("%", "%%").replace("?", "%s")
+    if re.match(r"\s*INSERT OR IGNORE", sql, re.I):
+        sql = re.sub(r"INSERT OR IGNORE", "INSERT", sql, count=1, flags=re.I).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+    sql = re.sub(r"\bLIKE\b", "ILIKE", sql)
+    return re.sub(r",\s*rowid\b", ", id", sql)
+
+
+def _pg_schema(sql: str) -> str:
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY").replace("BLOB", "BYTEA")
+    return re.sub(r"--[^\n]*", "", sql)
+
+
+class _PgConn:
+    """Connexion PostgreSQL qui accepte les requêtes de l'application (syntaxe SQLite)."""
+
+    def __init__(self):
+        import psycopg
+        from psycopg.rows import dict_row
+        self._c = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=20)
+
+    def execute(self, sql: str, params=()):
+        return self._c.execute(_pg_sql(sql), tuple(params))
+
+    def executescript(self, script: str) -> None:
+        for stmt in _pg_schema(script).split(";"):
+            if stmt.strip():
+                self._c.execute(stmt)
+
+    def commit(self):
+        self._c.commit()
+
+    def rollback(self):
+        self._c.rollback()
+
+    def close(self):
+        self._c.close()
+
+
+def connect():
+    if PG:
+        return _PgConn()
     DATA_DIR.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -172,6 +237,7 @@ MIGRATIONS = {
         "jobteaser_url": "TEXT DEFAULT ''",       # portail JobTeaser de l'utilisateur (ex. https://skema.jobteaser.com)
         "jobteaser_status": "TEXT DEFAULT ''",    # '' jamais connecté | connected | expired
         "jobteaser_at": "TEXT DEFAULT ''",
+        "sites_status": "TEXT DEFAULT '{}'",      # sites connectés, vus par l'extension
     },
     "applications": {
         "selected": "INTEGER DEFAULT 0",          # offre choisie par le candidat (étape 3)
@@ -180,14 +246,24 @@ MIGRATIONS = {
         "reviewed": "INTEGER DEFAULT 0",          # relu et autorisé à l'envoi
         "launched": "INTEGER DEFAULT 0",          # inclus dans un lancement « Valider et démarrer »
     },
+    "jobs": {
+        "claimed_at": "TEXT DEFAULT ''",          # prise en charge par l'extension du navigateur
+    },
 }
+
+
+def _columns(c, table: str) -> set:
+    if PG:
+        return {r["column_name"] for r in c.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=?", (table,))}
+    return {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
 
 
 def init() -> None:
     with tx() as c:
         c.executescript(SCHEMA)
         for table, cols in MIGRATIONS.items():
-            have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+            have = _columns(c, table)
             for col, decl in cols.items():
                 if col not in have:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")

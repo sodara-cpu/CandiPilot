@@ -1,0 +1,13 @@
+.git
+.venv
+.venv-1
+.user-profile
+data
+data-recette
+output
+config/profile.yaml
+config/offers.csv
+apprentissage
+tests
+.env
+**/__pycache__

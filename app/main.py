@@ -7,6 +7,7 @@ puis ouvrir http://127.0.0.1:8000
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,14 +18,14 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, matching, remote, robot, worker, workflow
+from . import agent, auth, db, files, matching, robot, worker, workflow
 
 STATIC = Path(__file__).parent / "static"
-UPLOADS = db.DATA_DIR / "uploads"
 MAX_UPLOAD = 5 * 1024 * 1024
 
 app = FastAPI(title="CandiPilot", docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.include_router(agent.router)
 
 CurrentUser = Depends(auth.current_user)
 
@@ -32,13 +33,15 @@ CurrentUser = Depends(auth.current_user)
 @app.on_event("startup")
 def _startup() -> None:
     db.init()
+    with db.tx() as c:
+        files.migrate_legacy(c)
     _adopt_owner_jobteaser()
     worker.start()
 
 
 def _adopt_owner_jobteaser() -> None:
     """Le propriétaire garde la session SKEMA du robot en ligne de commande (.user-profile)."""
-    if worker.FAKE or not robot.OWNER_PROFILE.exists():
+    if worker.ROBOT != "local" or not robot.OWNER_PROFILE.exists():
         return
     with db.tx() as c:
         first = c.execute("SELECT id FROM users ORDER BY created_at, rowid LIMIT 1").fetchone()
@@ -50,6 +53,13 @@ def _adopt_owner_jobteaser() -> None:
 @app.on_event("shutdown")
 def _shutdown() -> None:
     worker.stop()
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    with db.tx() as c:
+        c.execute("SELECT 1").fetchone()
+    return {"ok": True}
 
 
 @app.get("/", include_in_schema=False)
@@ -235,12 +245,8 @@ def delete_account(body: DeleteAccountIn, response: Response, user=CurrentUser):
         h = c.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],)).fetchone()["password_hash"]
         if not auth.verify_password(body.password, h):
             raise HTTPException(401, "Mot de passe incorrect.")
-        app_ids = [r["id"] for r in c.execute("SELECT id FROM applications WHERE user_id=?", (user["id"],))]
         c.execute("DELETE FROM users WHERE id=?", (user["id"],))
-    shutil.rmtree(UPLOADS / user["id"], ignore_errors=True)
     shutil.rmtree(robot.BROWSERS_DIR / user["id"], ignore_errors=True)   # navigateur robot (cookies JobTeaser)
-    for app_id in app_ids:
-        shutil.rmtree(robot.LETTERS_DIR / app_id, ignore_errors=True)
     response.delete_cookie(auth.COOKIE, path="/")
     return {"ok": True}
 
@@ -324,17 +330,14 @@ async def upload_document(file: UploadFile = File(...), type: str = Form("cv"), 
     if not content.startswith(b"%PDF"):
         raise HTTPException(415, "Seuls les fichiers PDF sont acceptés.")
     did = db.new_id()
-    folder = UPLOADS / user["id"]
-    folder.mkdir(parents=True, exist_ok=True)
     name = Path(file.filename or "document.pdf").name
-    path = folder / f"{did}.pdf"
-    path.write_bytes(content)
     with db.tx() as c:
+        ref = files.save(c, user["id"], name, content)
         prev = c.execute("SELECT MAX(version) v FROM documents WHERE user_id=? AND type=? AND name=?",
                          (user["id"], type, name)).fetchone()["v"] or 0
         first = not c.execute("SELECT 1 FROM documents WHERE user_id=? AND type=?", (user["id"], type)).fetchone()
         c.execute("""INSERT INTO documents(id,user_id,type,name,chemin,version,is_default,created_at)
-                     VALUES (?,?,?,?,?,?,?,?)""", (did, user["id"], type, name, str(path), prev + 1, int(first), db.now()))
+                     VALUES (?,?,?,?,?,?,?,?)""", (did, user["id"], type, name, ref, prev + 1, int(first), db.now()))
     return {"id": did, "name": name, "type": type, "version": prev + 1, "is_default": int(first)}
 
 
@@ -370,10 +373,7 @@ def delete_document(doc_id: str, user=CurrentUser):
                             (user["id"], d["type"])).fetchone()
             if nxt:
                 c.execute("UPDATE documents SET is_default=1 WHERE id=?", (nxt["id"],))
-    # Ne supprime que les fichiers envoyés dans l'application (pas un CV importé d'ailleurs).
-    p = Path(d["chemin"])
-    if UPLOADS in p.parents and p.exists():
-        p.unlink()
+        files.delete(c, d["chemin"])
     return {"ok": True}
 
 
@@ -381,9 +381,10 @@ def delete_document(doc_id: str, user=CurrentUser):
 def document_file(doc_id: str, user=CurrentUser):
     with db.tx() as c:
         d = c.execute("SELECT * FROM documents WHERE id=? AND user_id=?", (doc_id, user["id"])).fetchone()
-    if not d or not Path(d["chemin"]).exists():
+        got = files.read(c, d["chemin"]) if d else None
+    if not got:
         raise HTTPException(404, "Fichier introuvable.")
-    return FileResponse(d["chemin"], media_type="application/pdf", filename=d["name"])
+    return _pdf(d["name"], got[1])
 
 
 # ===================== Préférences (F03) + copilote =====================
@@ -471,20 +472,10 @@ class PortalIn(BaseModel):
     portal_url: str
 
 
-class RemoteInput(BaseModel):
-    action: str
-    x: float = 0
-    y: float = 0
-    text: str = ""
-    key: str = ""
-    dy: float = 0
-
-
 def _jobteaser_state(c, uid: str) -> dict:
     p = c.execute("SELECT jobteaser_url, jobteaser_status, jobteaser_at FROM preferences WHERE user_id=?", (uid,)).fetchone()
-    s = remote.get(uid)
     return {"portal_url": p["jobteaser_url"] or robot.DEFAULT_PORTAL, "status": p["jobteaser_status"] or "",
-            "connected_at": p["jobteaser_at"], "session": s.info() if s else None, "required": not worker.FAKE}
+            "connected_at": p["jobteaser_at"], "required": not worker.FAKE}
 
 
 @app.get("/api/jobteaser")
@@ -500,7 +491,7 @@ def jobteaser_portal(body: PortalIn, user=CurrentUser):
     if not url.startswith("http"):
         url = "https://" + url
     host = url.split("/")[2] if url.count("/") >= 2 else ""
-    fake_portal = worker.FAKE and host.startswith("127.0.0.1")     # faux portail des tests
+    fake_portal = TEST_PORTAL and host.startswith("127.0.0.1")     # faux portail des tests
     if not (host == "jobteaser.com" or host.endswith(".jobteaser.com")) and not fake_portal:
         raise HTTPException(422, "Adresse JobTeaser attendue, par exemple https://monecole.jobteaser.com")
     if not fake_portal:
@@ -513,44 +504,9 @@ def jobteaser_portal(body: PortalIn, user=CurrentUser):
         return _jobteaser_state(c, user["id"])
 
 
-@app.post("/api/jobteaser/connect", status_code=202)
-def jobteaser_connect(user=CurrentUser):
-    remote.start(user["id"])
-    with db.tx() as c:
-        return _jobteaser_state(c, user["id"])
-
-
-@app.get("/api/jobteaser/screen")
-def jobteaser_screen(user=CurrentUser):
-    s = remote.get(user["id"])
-    if not s or not s.screen:
-        raise HTTPException(404, "Écran pas encore disponible.")
-    return Response(s.screen, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
-
-
-@app.post("/api/jobteaser/input")
-def jobteaser_input(body: RemoteInput, user=CurrentUser):
-    s = remote.get(user["id"])
-    if not s:
-        raise HTTPException(409, "Aucune connexion en cours : clique d'abord « Connecter mon JobTeaser ».")
-    if body.action not in ("click", "type", "key", "scroll", "back", "reload"):
-        raise HTTPException(422, "Action inconnue.")
-    if body.action == "click" and not (0 <= body.x <= 1 and 0 <= body.y <= 1):
-        raise HTTPException(422, "Clic hors de l'écran.")
-    s.send(body.dict())
-    return s.info()
-
-
-@app.post("/api/jobteaser/cancel")
-def jobteaser_cancel(user=CurrentUser):
-    remote.stop(user["id"])
-    return {"ok": True}
-
-
 @app.delete("/api/jobteaser")
 def jobteaser_disconnect(user=CurrentUser):
-    """Oublie la session : le profil de navigateur de l'utilisateur est effacé."""
-    remote.stop(user["id"])
+    """Oublie la session (robot local : le profil de navigateur de l'utilisateur est effacé)."""
     own = robot.BROWSERS_DIR / user["id"]
     shutil.rmtree(own, ignore_errors=True)
     own.mkdir(parents=True, exist_ok=True)       # (le propriétaire quitte aussi l'ancien profil partagé)
@@ -559,29 +515,11 @@ def jobteaser_disconnect(user=CurrentUser):
         return _jobteaser_state(c, user["id"])
 
 
-if worker.FAKE:
-    # Faux portail JobTeaser pour les tests (robot simulé uniquement) : connexion puis liste d'offres.
-    @app.get("/fake-jobteaser/fr/job-offers", include_in_schema=False)
-    def fake_offers(request: Request):
-        if request.cookies.get("fakejt") != "1":
-            return RedirectResponse("/fake-jobteaser/login")
-        cards = "".join(f'<div data-testid="jobad-card"><h3><a href="#">Offre {i}</a></h3></div>' for i in range(3))
-        return HTMLResponse(f"<html><head><title>Offres</title></head><body><h1>Offres</h1>{cards}</body></html>")
-
-    @app.get("/fake-jobteaser/login", include_in_schema=False)
-    def fake_login_page():
-        return HTMLResponse("""<html><head><title>Connexion</title></head><body style="font:20px sans-serif">
-          <form method="post" action="/fake-jobteaser/login" style="margin:80px">
-          <input name="email" placeholder="E-mail" style="display:block;font-size:20px;margin:10px;width:400px">
-          <input name="password" type="password" placeholder="Mot de passe" style="display:block;font-size:20px;margin:10px;width:400px">
-          <button style="font-size:20px;margin:10px;width:400px;height:50px">Se connecter</button></form></body></html>""")
-
-    @app.post("/fake-jobteaser/login", include_in_schema=False)
-    def fake_login(password: str = Form("")):
-        r = RedirectResponse("/fake-jobteaser/fr/job-offers", status_code=303)
-        if password == "bonmotdepasse":
-            r.set_cookie("fakejt", "1", max_age=3600)
-        return r
+TEST_PORTAL = worker.FAKE or os.environ.get("CANDIPILOT_TEST_PORTAL") == "1"
+if TEST_PORTAL:
+    # Faux portail JobTeaser et faux formulaires, pour tester le robot et l'extension sans vrai site.
+    from .testportal import router as _test_portal
+    app.include_router(_test_portal)
 
 
 # ===================== Offres (F04, F05) =====================
@@ -778,19 +716,19 @@ def update_application(app_id: str, body: ApplicationIn, user=CurrentUser):
         if body.letter_text is not None and body.letter_text.strip() != (a["letter_text"] or "").strip():
             ctx = robot.load_context(c, user["id"])
             fields["letter_text"] = body.letter_text.strip()
-            fields["letter_path"] = robot.render_letter(ctx, a, body.letter_text.strip(), app_id)
+            fields["letter_path"] = robot.render_letter(c, ctx, a, body.letter_text.strip(), app_id)
             fields["letter_kind"] = "generated"
         elif body.letter_kind is not None and body.letter_kind != a["letter_kind"]:
             if body.letter_kind == "document":
                 doc = workflow.default_doc(c, user["id"], "lettre")
                 if not doc:
                     raise HTTPException(422, "Aucune lettre importée : ajoute-la dans « Documents ».")
-                fields.update(letter_kind="document", letter_path=robot.copy_letter(doc, app_id), letter_text="")
+                fields.update(letter_kind="document", letter_path=robot.copy_letter(c, doc, user["id"]), letter_text="")
             elif body.letter_kind == "generated":
                 ctx = robot.load_context(c, user["id"])
                 text = robot.draft_letter(ctx, a)
                 fields.update(letter_kind="generated", letter_text=text,
-                              letter_path=robot.render_letter(ctx, a, text, app_id))
+                              letter_path=robot.render_letter(c, ctx, a, text, app_id))
             else:
                 raise HTTPException(422, "Lettre : document ou generated.")
         if fields:
@@ -908,7 +846,7 @@ def delete_application(app_id: str, user=CurrentUser):
         if a["statut"] in ("soumission", "confirmee"):
             raise HTTPException(409, "Candidature envoyée ou en cours d'envoi : elle est conservée pour l'historique.")
         c.execute("DELETE FROM offers WHERE id=?", (a["offer_id"],))
-    shutil.rmtree(robot.LETTERS_DIR / app_id, ignore_errors=True)
+        files.delete(c, a["letter_path"])
     return {"ok": True}
 
 
@@ -916,9 +854,16 @@ def delete_application(app_id: str, user=CurrentUser):
 def application_letter(app_id: str, user=CurrentUser):
     with db.tx() as c:
         a = _app_or_404(c, app_id, user["id"])
-    if not a["letter_path"] or not Path(a["letter_path"]).exists():
+        got = files.read(c, a["letter_path"])
+    if not got:
         raise HTTPException(404, "Lettre pas encore générée.")
-    return FileResponse(a["letter_path"], media_type="application/pdf", filename=Path(a["letter_path"]).name)
+    return _pdf(*got)
+
+
+def _pdf(name: str, data: bytes) -> Response:
+    safe = name.encode("ascii", "ignore").decode() or "document.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{safe}"', "Cache-Control": "private, no-store"})
 
 
 # ===================== Tableau de bord, activité (F08, F09) =====================

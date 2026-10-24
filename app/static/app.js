@@ -580,14 +580,14 @@ const bindSelect = () => $app.querySelectorAll("[data-sel]").forEach((b) => b.on
 
 // ---------- étape 3 : critères et offres ----------
 async function prefsView() {
-  const [p, offers, jt] = await Promise.all([api("/api/preferences"), api("/api/offers"), api("/api/jobteaser")]);
+  const [p, offers, ag] = await Promise.all([api("/api/preferences"), api("/api/offers"), api("/api/agent/status")]);
   const lists = { metiers: [...p.metiers], zones: [...p.zones], contrats: [...p.contrats] };
   const open = offers.filter((o) => !["ignoree", "confirmee", "soumission"].includes(o.statut) && !o.launched);
   const nSel = open.filter((o) => o.selected).length;
   const searching = GUIDE?.searching;
   shell("prefs", `
     <header class="head"><div class="titles"><h1>3. Critères et offres</h1><p class="sub" style="margin:4px 0 0">Indique ce que tu cherches, lance la recherche, puis coche les offres auxquelles postuler. Rien n'est envoyé à cette étape.</p></div></header>
-    ${jobteaserCard(jt)}
+    ${sitesCard(ag)}
     <form class="card pad form" id="pf">
       <h2>Mes critères</h2>
       ${[["metiers", "Métiers ciblés *", "ex. private debt, M&A, corporate finance"], ["zones", "Localisations", "ex. Paris, France — vide = partout"], ["contrats", "Types de contrat", "ex. stage, alternance"]].map(([k, l, ph]) => `
@@ -631,85 +631,45 @@ async function prefsView() {
   document.getElementById("pf").onsubmit = (e) => { e.preventDefault(); save().then(route); };
   document.getElementById("searchNow").onclick = async () => { await save(); await act(() => api("/api/search", { method: "POST" }), "Recherche lancée : les offres arrivent dans quelques minutes. Aucun envoi."); route(); };
   bindSelect();
-  bindJobteaser(jt);
-  if (searching || open.some((o) => o.selected && o.statut === "preparation")) schedulePoll(4000);
+  bindSites(ag);
+  if (searching || open.some((o) => o.selected && o.statut === "preparation") || (ag.robot === "extension" && !ag.linked)) schedulePoll(4000);
 }
 
-// ---------- compte JobTeaser : connexion à distance ----------
-function jobteaserCard(jt) {
-  const st = jt.status === "connected" ? '<span class="badge b-green">✓ Connecté</span>'
-    : jt.status === "expired" ? '<span class="badge b-amber">Session expirée</span>' : '<span class="badge b-mute">Non connecté</span>';
-  return `<section class="card pad stack" id="jtCard">
-    <div class="spread"><div><h2>Mon compte JobTeaser ${jt.required ? "*" : ""}</h2>
-      <div class="sub" style="font-size:14px">Le robot cherche et postule avec <b>ton</b> compte JobTeaser, jamais avec celui de quelqu'un d'autre.${jt.required ? "" : " (Facultatif en mode démonstration.)"}</div></div>${st}</div>
-    <form id="jtPortal" class="row" style="flex-wrap:wrap">
-      <label class="f" style="flex:1 1 280px">Adresse JobTeaser de ton école<input type="text" name="portal_url" value="${esc(jt.portal_url)}" placeholder="https://monecole.jobteaser.com">
-        <span class="hint">Ex. https://skema.jobteaser.com. Sans école : https://www.jobteaser.com</span></label>
-      <button class="btn btn-ghost" type="submit" style="align-self:center">Enregistrer</button></form>
-    <div class="row" style="flex-wrap:wrap">
-      <button class="btn btn-primary" id="jtConnect">${jt.status === "connected" ? "Reconnecter" : "Connecter mon JobTeaser"}</button>
-      ${jt.status ? '<button class="btn btn-quiet" id="jtForget">Déconnecter</button>' : ""}</div>
+// ---------- sites connectés (extension du navigateur) ----------
+const SITE_LOGIN = { jobteaser: "https://www.jobteaser.com/fr/users/sign_in", linkedin: "https://www.linkedin.com/login",
+  wttj: "https://www.welcometothejungle.com/fr/signin" };
+const extensionInstalled = () => !!document.documentElement.dataset.candipilotExtension;
+
+function sitesCard(ag) {
+  if (ag.robot !== "extension") return `<section class="card pad"><h2>Robot</h2><p class="sub" style="margin:4px 0 0;font-size:14px">${ag.robot === "simule" ? "Mode démonstration : robot simulé, aucune vraie candidature." : "Robot local : il utilise le navigateur de la machine qui héberge CandiPilot."}</p></section>`;
+  const installed = extensionInstalled() || ag.linked;
+  const ext = ag.linked ? `<span class="badge b-green">✓ Extension reliée${ag.online ? " · en ligne" : ""}</span>`
+    : installed ? '<span class="badge b-amber">Extension installée, liaison en cours…</span>' : '<span class="badge b-mute">Extension à installer</span>';
+  return `<section class="card pad stack" id="sitesCard">
+    <div class="spread"><div><h2>Mes sites connectés *</h2>
+      <div class="sub" style="font-size:14px">CandiPilot travaille dans <b>ton</b> navigateur, avec les sessions que tu as déjà : aucun mot de passe à nous donner.</div></div>${ext}</div>
+    ${installed ? `
+      <ul class="sitelist">${ag.sites.map((x) => `<li><span class="${x.connected ? "okc" : "koc"}">${x.connected ? "✓" : x.connected === false ? "✗" : "…"}</span>
+        <b>${esc(x.name)}</b><span class="sub">${x.connected ? "connecté" : x.connected === false ? esc(x.detail || "non connecté") : "pas encore vérifié"}</span>
+        ${x.connected ? "" : `<a class="btn btn-ghost btn-sm" href="${esc(x.key === "jobteaser" && ag.portal ? ag.portal + "/fr/job-offers" : SITE_LOGIN[x.key])}" target="_blank" rel="noopener">Se connecter</a>`}</li>`).join("")}</ul>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-ghost" id="recheck" ${ag.linked ? "" : "disabled"}>J'ai fini de me connecter : vérifier</button>
+        <span class="hint">Connecte-toi normalement sur chaque site, dans un onglet de ce navigateur, puis clique « vérifier ».</span></div>`
+    : `<ol class="install">
+        <li><a class="btn btn-primary btn-sm" href="/extension.zip">Télécharger l'extension</a> puis double-clique sur le fichier pour le décompresser.</li>
+        <li>Dans Chrome, ouvre <code>chrome://extensions</code> et active le <b>Mode développeur</b> (en haut à droite).</li>
+        <li>Clique <b>Charger l'extension non empaquetée</b> et choisis le dossier <code>candipilot-extension</code>.</li>
+        <li>Reviens sur cette page : l'extension se relie toute seule à ton compte.</li></ol>
+      <p class="hint" style="margin:0">Bientôt : installation en un clic depuis le Chrome Web Store.</p>`}
+    <details><summary class="hint">Mon école sur JobTeaser</summary>
+      <form id="jtPortal" class="row" style="flex-wrap:wrap;margin-top:8px">
+        <label class="f" style="flex:1 1 260px">Adresse JobTeaser de ton école (détectée automatiquement)<input type="text" name="portal_url" value="${esc(ag.portal)}" placeholder="https://monecole.jobteaser.com"></label>
+        <button class="btn btn-ghost" type="submit" style="align-self:center">Enregistrer</button></form></details>
   </section>`;
 }
 
-function bindJobteaser(jt) {
-  document.getElementById("jtPortal").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/jobteaser", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Adresse enregistrée.").then(route); };
-  document.getElementById("jtForget")?.addEventListener("click", () => { if (confirm("Oublier ta session JobTeaser ? Le robot ne pourra plus chercher ni postuler pour toi.")) act(() => api("/api/jobteaser", { method: "DELETE" }), "Session JobTeaser oubliée.").then(route); });
-  document.getElementById("jtConnect").onclick = async () => { await act(() => api("/api/jobteaser/connect", { method: "POST" })); remoteViewer(); };
-}
-
-function remoteViewer() {
-  const send = (body) => api("/api/jobteaser/input", { method: "POST", body }).catch(() => {});
-  modal(`<div class="spread"><h2>Connexion à ton JobTeaser</h2><button class="btn btn-quiet btn-sm" data-close id="rvClose">Fermer</button></div>
-    <p class="sub" style="margin:6px 0 10px;font-size:14px">Connecte-toi comme d'habitude (identifiants de ton école, double authentification…) : clique dans l'écran puis tape au clavier.
-      CandiPilot ne voit ni ne garde ton mot de passe ; seule la session reste dans <b>ton</b> navigateur robot.</p>
-    <div id="rvStatus" class="hint">Ouverture du navigateur…</div>
-    <div id="rvScreen" class="rv" tabindex="0" aria-label="Écran du navigateur JobTeaser"><img id="rvImg" alt=""></div>
-    <div class="row" style="flex-wrap:wrap;margin-top:10px">
-      <input type="text" id="rvText" placeholder="Ou tape ici puis « Envoyer » (utile sur téléphone)" style="flex:1 1 220px">
-      <button class="btn btn-ghost btn-sm" id="rvSendText">Envoyer</button>
-      <button class="btn btn-ghost btn-sm" data-key="Enter">Entrée ↵</button><button class="btn btn-ghost btn-sm" data-key="Tab">Tab</button>
-      <button class="btn btn-ghost btn-sm" data-key="Backspace">⌫</button><button class="btn btn-quiet btn-sm" id="rvBack">← Retour</button>
-      <button class="btn btn-quiet btn-sm" id="rvReload">Recommencer</button><button class="btn btn-quiet btn-sm" id="rvCancel">Annuler</button></div>`,
-    (el, close) => {
-      const img = el.querySelector("#rvImg"), box = el.querySelector("#rvScreen"), status = el.querySelector("#rvStatus");
-      el.querySelector(".modal").classList.add("wide");
-      let buf = "", t = null, done = false;
-      const flush = () => { if (buf) { send({ action: "type", text: buf }); buf = ""; } };
-      box.addEventListener("click", (e) => { const r = img.getBoundingClientRect(); if (!r.width) return;
-        send({ action: "click", x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }); box.focus(); });
-      box.addEventListener("wheel", (e) => { e.preventDefault(); send({ action: "scroll", dy: e.deltaY }); }, { passive: false });
-      box.addEventListener("keydown", (e) => {
-        if (e.metaKey || e.ctrlKey) return;
-        if (e.key.length === 1) { e.preventDefault(); buf += e.key; clearTimeout(t); t = setTimeout(flush, 150); return; }
-        const k = e.shiftKey && e.key === "Tab" ? "Shift+Tab" : e.key;
-        if (["Enter", "Tab", "Shift+Tab", "Backspace", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Delete"].includes(k)) { e.preventDefault(); flush(); send({ action: "key", key: k }); }
-      });
-      box.addEventListener("paste", (e) => { e.preventDefault(); flush(); send({ action: "type", text: e.clipboardData.getData("text") }); });
-      el.querySelector("#rvSendText").onclick = () => { const i = el.querySelector("#rvText"); if (i.value) { send({ action: "type", text: i.value }); i.value = ""; } };
-      el.querySelectorAll("[data-key]").forEach((b) => b.onclick = () => send({ action: "key", key: b.dataset.key }));
-      el.querySelector("#rvBack").onclick = () => send({ action: "back" });
-      el.querySelector("#rvReload").onclick = () => send({ action: "reload" });
-      el.querySelector("#rvCancel").onclick = () => { api("/api/jobteaser/cancel", { method: "POST" }); close(); route(); };
-      el.querySelector("#rvClose").addEventListener("click", () => api("/api/jobteaser/cancel", { method: "POST" }));
-      const tick = async () => {
-        if (!document.body.contains(el) || done) return;
-        try {
-          const st = await api("/api/jobteaser");
-          const sess = st.session;
-          if (st.status === "connected" && (!sess || sess.status === "connecte")) {
-            done = true; toast("Compte JobTeaser connecté : le robot travaillera avec ton compte."); close(); route(); return;
-          }
-          if (sess?.status === "erreur") { status.textContent = "Le navigateur a rencontré une erreur : " + sess.error; return; }
-          if (!sess) { status.textContent = "Connexion fermée. Clique « Connecter mon JobTeaser » pour recommencer."; return; }
-          status.textContent = sess.status === "demarrage" ? "Ouverture du navigateur…" : "En attente de ta connexion… " + (sess.title ? "(" + sess.title + ")" : "");
-          const r = await fetch("/api/jobteaser/screen", { credentials: "same-origin", cache: "no-store" });
-          if (r.ok) { const u = URL.createObjectURL(await r.blob()); const old = img.src; img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
-        } catch { /* réessaie */ }
-        setTimeout(tick, 700);
-      };
-      tick(); box.focus();
-    });
+function bindSites(ag) {
+  document.getElementById("jtPortal")?.addEventListener("submit", (e) => { e.preventDefault(); act(() => api("/api/jobteaser", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Adresse enregistrée.").then(route); });
+  document.getElementById("recheck")?.addEventListener("click", () => act(() => api("/api/agent/check", { method: "POST" }), "Vérification demandée à l'extension…").then(() => schedulePoll(4000)));
 }
 
 // ---------- étape 1 : profil ----------
@@ -831,7 +791,7 @@ async function sendView() {
   const global = [];
   if (!L.mode_chosen) global.push(["Mode de soumission pas encore choisi.", "#/mode", "Choisir"]);
   else if (L.mode !== "auto" && (L.want_prepare === -1 || L.want_review === -1)) global.push(["Réponds aux questions de préparation et de relecture.", "#/mode", "Répondre"]);
-  if (L.missing_jobteaser) global.push(["Il manque " + L.missing_jobteaser + ".", "#/criteres", "Connecter"]);
+  if (L.missing_jobteaser) global.push(["Il manque " + L.missing_jobteaser + ".", "#/criteres", "Voir mes sites"]);
   if (L.missing_profile.length) global.push(["Profil incomplet : " + L.missing_profile.join(", ") + ".", "#/profil", "Compléter"]);
   if (L.missing_documents.length) global.push(["Il manque : " + L.missing_documents.join(", ") + ".", "#/documents", "Ajouter"]);
   const yesNo = (v) => v === 1 ? "Oui" : v === 0 ? "Non" : "Pas encore répondu";

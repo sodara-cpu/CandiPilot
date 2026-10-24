@@ -23,7 +23,9 @@ ITERATIONS = 240_000
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Mise en ligne (deploy.sh) : cookie HTTPS uniquement, adresse publique pour les liens envoyés.
 SECURE_COOKIE = os.environ.get("CANDIPILOT_SECURE_COOKIE") == "1"
-PUBLIC_URL = os.environ.get("CANDIPILOT_PUBLIC_URL", "").rstrip("/")
+# Adresse publique (liens des e-mails) ; Render la fournit dans RENDER_EXTERNAL_URL.
+PUBLIC_URL = (os.environ.get("CANDIPILOT_PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+TRUST_PROXY = os.environ.get("CANDIPILOT_TRUST_PROXY") == "1"    # derrière le proxy de l'hébergeur
 RESET_MINUTES = 60
 
 # Limite simple anti-force brute : 10 tentatives / 10 min par IP + e-mail.
@@ -62,6 +64,8 @@ def check_password_strength(password: str) -> None:
 def client_ip(request: Request) -> str:
     """IP du visiteur ; derrière le tunnel Cloudflare (local), elle est dans CF-Connecting-IP."""
     host = request.client.host if request.client else ""
+    if TRUST_PROXY and request.headers.get("x-forwarded-for"):
+        return request.headers["x-forwarded-for"].split(",")[0].strip()
     if host in ("127.0.0.1", "::1"):
         return request.headers.get("cf-connecting-ip", host)
     return host

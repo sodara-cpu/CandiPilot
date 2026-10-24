@@ -153,7 +153,8 @@ def main():
     check(a.req("POST", f"/api/applications/{target['id']}/validate")[0] == 409, "validation refusée avant préparation")
     check(a.req("POST", f"/api/applications/{target['id']}/prepare")[0] == 202, "préparation lancée")
     app = wait_status(a, target["id"], {"a_valider"})
-    check(app["letter_path"].endswith(".pdf") and "Acme" in app["letter_text"], "lettre PDF générée et adaptée")
+    check(app["letter_path"] and "Acme" in app["letter_text"]
+          and a.req("GET", f"/api/applications/{target['id']}/letter")[1][:4] == b"%PDF", "lettre PDF générée et adaptée")
     check(a.req("GET", f"/api/applications/{target['id']}/letter")[1][:4] == b"%PDF", "lettre téléchargeable")
     s, app = a.req("PUT", f"/api/applications/{target['id']}", {"letter_text": app["letter_text"] + "\nPS : test"})
     check("PS : test" in app["letter_text"], "lettre modifiée et PDF regénéré")

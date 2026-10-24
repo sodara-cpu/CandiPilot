@@ -201,8 +201,9 @@ textarea{min-height:110px;resize:vertical;line-height:1.5}
 .yn legend{font-weight:600;padding:0 4px}
 tr.selrow td{background:var(--violet-bg)}
 
-/* Connexion à distance (JobTeaser) */
-.modal.wide{width:min(1180px,calc(100vw - 32px));max-width:none}
-.rv{border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:#f2f3f7;cursor:pointer;outline:none;min-height:200px}
-.rv:focus{box-shadow:0 0 0 3px var(--violet-bg);border-color:var(--violet)}
-.rv img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none}
+/* Sites connectés (extension) */
+.sitelist{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.sitelist li{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border:1px solid var(--line);border-radius:12px}
+.sitelist li .btn{margin-left:auto}.okc{color:var(--green);font-weight:700}.koc{color:var(--red);font-weight:700}
+.install{margin:0;padding-left:20px;display:grid;gap:8px;font-size:14px}
+code{background:#EEF0F6;border-radius:6px;padding:1px 6px;font-size:13px}

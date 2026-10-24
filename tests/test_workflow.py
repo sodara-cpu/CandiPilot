@@ -108,7 +108,8 @@ for o in jt:
 ids = [o["application_id"] for o in jt]
 wait_until(lambda: statuses(c, ids) == ["a_valider"] * 2)
 a = c.req("GET", f"/api/applications/{ids[0]}")[1]
-check(a["letter_kind"] == "document" and a["letter_path"].endswith("lettre.pdf"), "préparation : la lettre importée est utilisée, pas remplacée")
+check(a["letter_kind"] == "document" and c.req("GET", f"/api/applications/{ids[0]}/letter")[1] == PDF,
+      "préparation : la lettre importée est utilisée telle quelle, pas remplacée")
 g = guide(c)
 check(g["steps"][2]["done"] and g["current"] == 3, "offres sélectionnées : étape 3 faite")
 check(c.req("GET", "/api/preferences")[1]["default_mode"] == "auto" and not guide(c)["steps"][3]["done"], "mode par défaut ≠ mode choisi")

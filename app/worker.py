@@ -1,16 +1,21 @@
-"""Worker du robot : exécute les tâches en arrière-plan, une à la fois.
-
-Une seule tâche à la fois, car toutes partagent le navigateur du robot
-(profil Chromium ./.user-profile, connecté à JobTeaser).
+"""Tâches du robot : file d'attente, exécution, enregistrement des résultats.
 
 Tâches :
 - search  : recherche + classement des offres (F04, F05)
-- prepare : lettre PDF + lecture du formulaire (lettre demandée ? questions ?) (F06)
+- prepare : lecture du formulaire (lettre demandée ? questions ?) + lettre PDF (F06)
 - submit  : envoi automatique ou assisté, puis preuve d'envoi (F07, règle « preuve vérifiable »)
 - verify  : réconciliation d'une candidature « Incertaine » (§3.4)
+- check_sites : vérifier les sites où l'utilisateur est connecté (extension)
 
-CANDIPILOT_FAKE_ROBOT=1 simule le robot (aucun navigateur, aucun envoi réel) :
-utile pour les tests et les démonstrations.
+Trois façons d'exécuter (CANDIPILOT_ROBOT) :
+- extension (défaut) : l'extension CandiPilot du navigateur de CHAQUE utilisateur prend ses tâches
+                       (app/agent.py) et les exécute avec ses propres sessions ; le serveur n'ouvre
+                       aucun navigateur.
+- local              : le robot Playwright de src/ tourne sur la machine du serveur (ancien mode).
+- simule             : aucun navigateur, résultats fictifs (tests ; aussi CANDIPILOT_FAKE_ROBOT=1).
+
+Quel que soit le mode, les résultats passent par les fonctions finish_* : mêmes règles partout
+(pas de doublon, « Envoyée » seulement avec une preuve).
 """
 from __future__ import annotations
 
@@ -18,13 +23,15 @@ import hashlib
 import json
 import os
 import threading
-import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from . import db, matching, remote, robot
+from . import db, files, matching, robot
 
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
+ROBOT = "simule" if FAKE else (os.environ.get("CANDIPILOT_ROBOT") or "extension")
+AGENT_TYPES = ("search", "prepare", "submit", "verify", "check_sites")
+STALE_MIN = 20          # tâche prise par une extension sans réponse depuis 20 min
 POLL_S = 2
 _stop = threading.Event()
 _threads: list = []
@@ -44,7 +51,7 @@ def enqueue(conn, user_id: str, kind: str, application_id: str = "") -> str:
     return jid
 
 
-def _progress(job_id: str, text: str) -> None:
+def progress(job_id: str, text: str) -> None:
     with db.tx() as c:
         c.execute("UPDATE jobs SET progress=?, updated_at=? WHERE id=?", (text[:300], db.now(), job_id))
 
@@ -55,70 +62,49 @@ def _set_app(c, app_id: str, **fields) -> None:
     c.execute(f"UPDATE applications SET {cols} WHERE id=?", (*fields.values(), app_id))
 
 
-def _load_app(c, app_id: str):
+def load_app(c, app_id: str):
     r = c.execute("""SELECT a.*, o.url, o.poste, o.entreprise, o.localisation, o.contrat, o.domaine,
                      o.start_date, o.apply_type, o.score FROM applications a JOIN offers o ON o.id=a.offer_id
                      WHERE a.id=?""", (app_id,)).fetchone()
     return db.row(r)
 
 
-# ---------- compte JobTeaser de l'utilisateur ----------
-
-def _jobteaser_ready(uid: str, app_id: str = "") -> bool:
+def jobteaser_ready(uid: str, app_id: str = "") -> bool:
     """Le robot réel n'agit qu'avec le compte JobTeaser de l'utilisateur, jamais avec celui d'un autre."""
     with db.tx() as c:
         st = c.execute("SELECT jobteaser_status FROM preferences WHERE user_id=?", (uid,)).fetchone()["jobteaser_status"]
         if st == "connected":
             return True
         msg = ("Ta session JobTeaser a expiré" if st == "expired" else "Ton compte JobTeaser n'est pas connecté") + \
-              " : connecte-le à l'étape 3 (Critères et offres)."
+              " : connecte-toi à JobTeaser dans ton navigateur (étape 3)."
         db.add_event(c, uid, "error", msg, app_id)
         if app_id:
             _set_app(c, app_id, statut="echec", detail=msg)
     return False
 
 
-def _session(uid: str):
-    from src.browser import browser_session
-    with db.tx() as c:
-        return browser_session(robot.browser_settings(c, uid))
+# ---------- enregistrement des résultats (commun aux trois modes) ----------
 
-
-# ---------- tâches ----------
-
-def run_search(job: dict) -> None:
+def finish_search(job: dict, found: list, stats: dict) -> None:
+    from src.search import _clean_title, _guess_domain
     uid = job["user_id"]
     with db.tx() as c:
         ctx = robot.load_context(c, uid)
-        known = {r["url"] for r in c.execute("SELECT url FROM offers WHERE user_id=?", (uid,))}
-    cfg = robot.search_cfg(ctx["prefs"])
-    if not cfg["keywords"]:
-        with db.tx() as c:
-            db.add_event(c, uid, "warning", "Recherche impossible : ajoute au moins un métier ciblé dans tes critères.")
-        return
-
-    if FAKE:
-        found, stats = _fake_search(cfg, known), {"external": 0, "date": 0, "login": True}
-    else:
-        from src.search import collect
-        if not _jobteaser_ready(uid):
-            return
-        with db.tx() as c:
-            settings = robot.browser_settings(c, uid)
-        found, stats = collect(settings, cfg, known, robot.default_domain_lines(),
-                               log=lambda m: _progress(job["id"], m))
-
-    with db.tx() as c:
-        if not stats["login"]:
+        if not stats.get("login", True):
             c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
-            db.add_event(c, uid, "error", "Ta session JobTeaser a expiré : reconnecte ton compte (étape 3) puis relance la recherche.")
+            db.add_event(c, uid, "error", "Ta session JobTeaser a expiré : reconnecte-toi à JobTeaser dans ton navigateur, puis relance la recherche.")
             return
         min_score = int(ctx["prefs"].get("min_score") or 50)
+        lines = robot.default_domain_lines()
         kept = 0
         for o in found:
-            offer = {"poste": o["role"], "entreprise": o["company"], "localisation": o.get("location", ""),
-                     "contrat": o.get("contract", ""), "domaine": o.get("domain", ""),
+            role = _clean_title(o.get("role") or o.get("title") or "")
+            offer = {"poste": role, "entreprise": (o.get("company") or "").strip(), "localisation": (o.get("location") or "").strip(),
+                     "contrat": (o.get("contract") or "").strip(),
+                     "domaine": o.get("domain") or _guess_domain(role, o.get("keyword") or "", lines),
                      "start_date": o.get("start_date", ""), "apply_type": o.get("apply_type", "jobteaser")}
+            if not o.get("url") or not offer["poste"]:
+                continue
             s = matching.score(offer, ctx["prefs"], ctx["profile"])
             oid = db.new_id()
             cur = c.execute("""INSERT OR IGNORE INTO offers(id,user_id,url,poste,entreprise,localisation,contrat,
@@ -136,46 +122,46 @@ def run_search(job: dict) -> None:
         db.add_event(c, uid, "info", f"{len(found)} nouvelles offres analysées, {kept} retenues.")
 
 
-def run_prepare(job: dict) -> None:
+def _letter(c, a: dict, ctx: dict) -> tuple:
+    """Lettre de la candidature : la lettre importée si c'est le choix du candidat (jamais remplacée sans lui),
+    sinon une lettre adaptée à l'offre à partir de son modèle. Renvoie (texte, référence, type)."""
+    uid = a["user_id"]
+    source = c.execute("SELECT letter_source FROM preferences WHERE user_id=?", (uid,)).fetchone()["letter_source"]
+    kind = a["letter_kind"] or ("document" if source == "document" else "generated")
+    if kind == "document":
+        doc = c.execute("""SELECT chemin, name FROM documents WHERE user_id=? AND type='lettre'
+                           ORDER BY is_default DESC, created_at DESC LIMIT 1""", (uid,)).fetchone()
+        return "", robot.copy_letter(c, doc, uid) if doc else "", kind
+    text = a["letter_text"] or robot.draft_letter(ctx, a)
+    return text, robot.render_letter(c, ctx, a, text, a["id"]), kind
+
+
+def finish_prepare(job: dict, info: dict) -> None:
     uid, app_id = job["user_id"], job["application_id"]
     with db.tx() as c:
-        a = _load_app(c, app_id)
+        a = load_app(c, app_id)
         if not a or a["statut"] in ("confirmee", "soumission"):
             return
         ctx = robot.load_context(c, uid)
         cv = robot.default_cv(c, uid)
-        _set_app(c, app_id, statut="preparation", cv_document_id=a["cv_document_id"] or (cv["id"] if cv else ""))
-
-    # Lettre : celle importée par le candidat si c'est son choix (jamais remplacée sans lui),
-    # sinon une lettre adaptée à l'offre à partir de son modèle.
-    with db.tx() as c:
-        source = c.execute("SELECT letter_source FROM preferences WHERE user_id=?", (uid,)).fetchone()["letter_source"]
-        doc = c.execute("""SELECT chemin, name FROM documents WHERE user_id=? AND type='lettre'
-                           ORDER BY is_default DESC, created_at DESC LIMIT 1""", (uid,)).fetchone()
-    kind = a["letter_kind"] or ("document" if source == "document" else "generated")
-    if kind == "document":
-        text, pdf = "", robot.copy_letter(doc, app_id) if doc else ""
-        _progress(job["id"], "Lettre importée sélectionnée" if doc else "Lettre importée introuvable")
-    else:
-        text = a["letter_text"] or robot.draft_letter(ctx, a)
-        _progress(job["id"], "Lettre adaptée générée")
-        pdf = robot.render_letter(ctx, a, text, app_id)
-
-    if not FAKE and a["apply_type"] == "jobteaser" and not _jobteaser_ready(uid, app_id):
-        return
-    info = _inspect(a, ctx, job["id"])
-    with db.tx() as c:
+        old = a["letter_path"]
+        text, pdf, kind = _letter(c, a, ctx)
+        if old and old != pdf:
+            files.delete(c, old)
         questions = db.jload(a["questions"], [])
         known = {q["label"]: q.get("answer", "") for q in questions}
-        questions = [{"label": l, "answer": known.get(l, "")} for l in info["questions"]]
+        questions = [{"label": l, "answer": known.get(l, "")} for l in info.get("questions") or []]
         fields = dict(letter_text=text, letter_path=pdf, letter_kind=kind, questions=json.dumps(questions, ensure_ascii=False),
-                      letter_needed=int(info["letter"]) if info["kind"] == "easy" else -1, detail=info["detail"])
-        if info["kind"] == "already":
-            fields.update(statut="confirmee", preuve="JobTeaser : « Vous avez postulé à cette offre »",
-                          date_envoi=db.now())
+                      letter_needed=int(bool(info.get("letter"))) if info.get("kind") == "easy" else -1,
+                      detail=info.get("detail", ""), cv_document_id=a["cv_document_id"] or (cv["id"] if cv else ""))
+        if info.get("kind") == "already":
+            fields.update(statut="confirmee", preuve="JobTeaser : « Vous avez postulé à cette offre »", date_envoi=db.now())
             db.add_event(c, uid, "success", f"Déjà postulé : {a['entreprise']} (preuve JobTeaser).", app_id)
+        elif info.get("kind") == "login":
+            c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
+            fields.update(statut="echec", detail="Connexion JobTeaser expirée : reconnecte-toi puis reprends ce dossier.")
         else:
-            if info["kind"] == "external":
+            if info.get("kind") == "external":
                 fields["mode"] = "manual"
             fields["statut"] = "a_valider"
             msg = f"Dossier prêt pour {a['entreprise']}"
@@ -184,82 +170,146 @@ def run_prepare(job: dict) -> None:
         _set_app(c, app_id, **fields)
 
 
-def _inspect(a: dict, ctx: dict, job_id: str) -> dict:
-    if FAKE:
-        fake_q = ["Pourquoi souhaitez-vous nous rejoindre ?"] if len(a["entreprise"]) % 2 else []
-        return {"kind": "easy" if a["apply_type"] == "jobteaser" else "external",
-                "letter": True, "questions": fake_q, "detail": "Formulaire lu (robot simulé)."}
-    if a["apply_type"] != "jobteaser":
-        return {"kind": "external", "letter": False, "questions": [],
-                "detail": "Candidature sur le site de l'entreprise : envoi manuel."}
-    from src.adapters.jobteaser import JobTeaserAdapter
-    _progress(job_id, "Lecture du formulaire JobTeaser")
-    with _session(a["user_id"]) as bctx:
-        page = bctx.pages[0] if bctx.pages else bctx.new_page()
-        page.goto(a["url"], wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
-        return JobTeaserAdapter().inspect(page)
-
-
-def run_submit(job: dict) -> None:
+def finish_submit(job: dict, status: str, detail: str, proof: str = "") -> None:
     uid, app_id = job["user_id"], job["application_id"]
     with db.tx() as c:
-        a = _load_app(c, app_id)
-        if not a or a["statut"] != "soumission":
+        a = load_app(c, app_id)
+        if not a:
             return
-        ctx = robot.load_context(c, uid)
-        dup = c.execute("""SELECT 1 FROM applications a JOIN offers o ON o.id=a.offer_id
-                           WHERE a.user_id=? AND o.url=? AND a.statut='confirmee' AND a.id<>?""",
-                        (uid, a["url"], app_id)).fetchone()
-        cv = c.execute("SELECT chemin FROM documents WHERE id=? AND user_id=?",
-                       (a["cv_document_id"], uid)).fetchone() or robot.default_cv(c, uid)
-    if dup:
-        with db.tx() as c:
-            _set_app(c, app_id, statut="ignoree", detail="Doublon : une candidature confirmée existe déjà.")
-        return
-
-    screening = {q["label"]: q.get("answer", "") for q in db.jload(a["questions"], [])}
-    mode = a["mode"] if a["mode"] in ("auto", "assisted") else "auto"
-    _progress(job["id"], "Envoi automatique" if mode == "auto" else "Envoi assisté : à toi de cliquer « Postuler »")
-
-    if not FAKE and a["apply_type"] == "jobteaser" and not _jobteaser_ready(uid, app_id):
-        return
-    if FAKE:
-        status, detail = "submitted", f"envoi simulé ({mode})"
-    else:
-        status, detail = _submit_real(a, ctx, cv["chemin"] if cv else "", screening, mode)
-
-    with db.tx() as c:
         if status in ("submitted", "skipped"):
             _set_app(c, app_id, statut="confirmee", detail=detail, date_envoi=db.now(),
-                     preuve="JobTeaser : « Vous avez postulé à cette offre »" if not FAKE else "Preuve simulée")
+                     preuve=proof or "JobTeaser : « Vous avez postulé à cette offre »")
             db.add_event(c, uid, "success", f"Confirmation reçue : {a['entreprise']}.", app_id)
         elif status == "uncertain":
             _set_app(c, app_id, statut="incertaine", detail=detail)
             db.add_event(c, uid, "warning", f"Envoi non confirmé pour {a['entreprise']} : vérification à faire.", app_id)
         else:
+            if status == "login":
+                c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
             _set_app(c, app_id, statut="echec", detail=detail)
             db.add_event(c, uid, "error", f"Échec de l'envoi pour {a['entreprise']} : {detail}", app_id)
 
 
-def _submit_real(a: dict, ctx: dict, cv_path: str, screening: dict, mode: str) -> tuple:
+def finish_verify(job: dict, ok: bool) -> None:
+    uid, app_id = job["user_id"], job["application_id"]
+    with db.tx() as c:
+        a = load_app(c, app_id)
+        if not a:
+            return
+        if ok:
+            _set_app(c, app_id, statut="confirmee", date_envoi=a["date_envoi"] or db.now(),
+                     preuve="JobTeaser : « Vous avez postulé à cette offre »")
+            db.add_event(c, uid, "success", f"Confirmation reçue : {a['entreprise']}.", app_id)
+        else:
+            db.add_event(c, uid, "warning", f"Aucune preuve d'envoi pour {a['entreprise']} : elle reste « Incertaine ».", app_id)
+
+
+def submit_guard(job: dict):
+    """Avant tout envoi : la candidature est-elle toujours à envoyer, sans doublon ? Renvoie l'application ou None."""
+    with db.tx() as c:
+        a = load_app(c, job["application_id"])
+        if not a or a["statut"] != "soumission":
+            return None
+        dup = c.execute("""SELECT 1 FROM applications a JOIN offers o ON o.id=a.offer_id
+                           WHERE a.user_id=? AND o.url=? AND a.statut='confirmee' AND a.id<>?""",
+                        (a["user_id"], a["url"], a["id"])).fetchone()
+        if dup:
+            _set_app(c, a["id"], statut="ignoree", detail="Doublon : une candidature confirmée existe déjà.")
+            return None
+        return a
+
+
+# ---------- exécution sur le serveur : robot simulé ou robot local (Playwright) ----------
+
+def _session(uid: str):
+    from src.browser import browser_session
+    with db.tx() as c:
+        return browser_session(robot.browser_settings(c, uid))
+
+
+def run_search(job: dict) -> None:
+    uid = job["user_id"]
+    with db.tx() as c:
+        ctx = robot.load_context(c, uid)
+        known = {r["url"] for r in c.execute("SELECT url FROM offers WHERE user_id=?", (uid,))}
+    cfg = robot.search_cfg(ctx["prefs"])
+    if not cfg["keywords"]:
+        with db.tx() as c:
+            db.add_event(c, uid, "warning", "Recherche impossible : ajoute au moins un métier ciblé dans tes critères.")
+        return
+    if FAKE:
+        found, stats = _fake_search(cfg, known), {"external": 0, "date": 0, "login": True}
+    else:
+        from src.search import collect
+        if not jobteaser_ready(uid):
+            return
+        with db.tx() as c:
+            settings = robot.browser_settings(c, uid)
+        found, stats = collect(settings, cfg, known, robot.default_domain_lines(), log=lambda m: progress(job["id"], m))
+    finish_search(job, found, stats)
+
+
+def run_prepare(job: dict) -> None:
+    with db.tx() as c:
+        a = load_app(c, job["application_id"])
+        if not a or a["statut"] in ("confirmee", "soumission"):
+            return
+        _set_app(c, a["id"], statut="preparation")
+    if FAKE:
+        fake_q = ["Pourquoi souhaitez-vous nous rejoindre ?"] if len(a["entreprise"]) % 2 else []
+        info = {"kind": "easy" if a["apply_type"] == "jobteaser" else "external",
+                "letter": True, "questions": fake_q, "detail": "Formulaire lu (robot simulé)."}
+    elif a["apply_type"] != "jobteaser":
+        info = {"kind": "external", "letter": False, "questions": [], "detail": "Candidature sur le site de l'entreprise : envoi manuel."}
+    else:
+        if not jobteaser_ready(job["user_id"], a["id"]):
+            return
+        from src.adapters.jobteaser import JobTeaserAdapter
+        progress(job["id"], "Lecture du formulaire JobTeaser")
+        with _session(job["user_id"]) as bctx:
+            page = bctx.pages[0] if bctx.pages else bctx.new_page()
+            page.goto(a["url"], wait_until="domcontentloaded")
+            page.wait_for_timeout(5000)
+            info = JobTeaserAdapter().inspect(page)
+    finish_prepare(job, info)
+
+
+def run_submit(job: dict) -> None:
+    a = submit_guard(job)
+    if not a:
+        return
+    mode = a["mode"] if a["mode"] in ("auto", "assisted") else "auto"
+    progress(job["id"], "Envoi automatique" if mode == "auto" else "Envoi assisté : à toi de cliquer « Postuler »")
+    if FAKE:
+        return finish_submit(job, "submitted", f"envoi simulé ({mode})", "Preuve simulée")
+    if a["apply_type"] == "jobteaser" and not jobteaser_ready(job["user_id"], a["id"]):
+        return
+    with db.tx() as c:
+        ctx = robot.load_context(c, a["user_id"])
+        cv = c.execute("SELECT chemin FROM documents WHERE id=? AND user_id=?", (a["cv_document_id"], a["user_id"])).fetchone() \
+            or robot.default_cv(c, a["user_id"])
+        cv_path = files.materialize(c, cv["chemin"]) if cv else ""
+        letter_path = files.materialize(c, a["letter_path"])
+    screening = {q["label"]: q.get("answer", "") for q in db.jload(a["questions"], [])}
+    finish_submit(job, *_submit_local(a, ctx, cv_path, letter_path, screening, mode))
+
+
+def _submit_local(a: dict, ctx: dict, cv_path: str, letter_path: str, screening: dict, mode: str) -> tuple:
     from src.adapters import pick_adapter
     from src.adapters.jobteaser import JobTeaserAdapter
 
     profile = robot.to_profile(ctx, cv_path=cv_path, screening=screening)
     offer = robot.to_offer(a)
-    message = {"body": a["letter_text"], "pdf_path": a["letter_path"]}
+    message = {"body": a["letter_text"], "pdf_path": letter_path}
     adapter = pick_adapter(offer)
     with _session(a["user_id"]) as bctx:
         page = bctx.pages[0] if bctx.pages else bctx.new_page()
         page.goto(a["url"], wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
         if isinstance(adapter, JobTeaserAdapter):
-            res = adapter.apply(page, offer, profile, message, dry_run=False,
-                                confirm_before_submit=False, mode=mode)
+            res = adapter.apply(page, offer, profile, message, dry_run=False, confirm_before_submit=False, mode=mode)
         else:
-            res = adapter.apply(page, offer, profile, message, dry_run=(mode != "auto"),
-                                confirm_before_submit=False)
+            res = adapter.apply(page, offer, profile, message, dry_run=(mode != "auto"), confirm_before_submit=False)
         if mode == "assisted" and res.status == "filled_dry":
             ok = JobTeaserAdapter().wait_for_user_submit(page) if isinstance(adapter, JobTeaserAdapter) else False
             return ("submitted", res.detail + " ; envoyé par toi") if ok else \
@@ -272,28 +322,20 @@ def _submit_real(a: dict, ctx: dict, cv_path: str, screening: dict, mode: str) -
 
 
 def run_verify(job: dict) -> None:
-    uid, app_id = job["user_id"], job["application_id"]
     with db.tx() as c:
-        a = _load_app(c, app_id)
+        a = load_app(c, job["application_id"])
     if not a:
         return
-    ok = True
-    if not FAKE and not _jobteaser_ready(uid):
+    if FAKE:
+        return finish_verify(job, True)
+    if not jobteaser_ready(job["user_id"]):
         return
-    if not FAKE:
-        from src.adapters.jobteaser import ALREADY_APPLIED
-        with _session(uid) as bctx:
-            page = bctx.pages[0] if bctx.pages else bctx.new_page()
-            page.goto(a["url"], wait_until="domcontentloaded")
-            page.wait_for_timeout(5000)
-            ok = page.get_by_text(ALREADY_APPLIED).count() > 0
-    with db.tx() as c:
-        if ok:
-            _set_app(c, app_id, statut="confirmee", date_envoi=a["date_envoi"] or db.now(),
-                     preuve="JobTeaser : « Vous avez postulé à cette offre »")
-            db.add_event(c, uid, "success", f"Confirmation reçue : {a['entreprise']}.", app_id)
-        else:
-            db.add_event(c, uid, "warning", f"Aucune preuve d'envoi pour {a['entreprise']} : elle reste « Incertaine ».", app_id)
+    from src.adapters.jobteaser import ALREADY_APPLIED
+    with _session(job["user_id"]) as bctx:
+        page = bctx.pages[0] if bctx.pages else bctx.new_page()
+        page.goto(a["url"], wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        finish_verify(job, page.get_by_text(ALREADY_APPLIED).count() > 0)
 
 
 def _fake_search(cfg: dict, known: set) -> list:
@@ -320,15 +362,23 @@ HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, 
 # ---------- boucles ----------
 
 def _next_job():
+    """Prochaine tâche exécutée sur le serveur (modes simulé et local ; en mode extension, c'est agent.py)."""
+    if ROBOT == "extension":
+        return None
     with db.tx() as c:
-        # Les tâches d'un utilisateur en train de connecter son JobTeaser attendent (même navigateur).
-        busy = sorted(remote.active_users())
-        r = c.execute(f"""SELECT * FROM jobs WHERE statut='en_attente'
-                          AND user_id NOT IN ({','.join('?' * len(busy))}) ORDER BY created_at LIMIT 1""", busy).fetchone()
+        r = c.execute("""SELECT * FROM jobs WHERE statut='en_attente' AND type<>'check_sites'
+                         ORDER BY created_at LIMIT 1""").fetchone()
         if r is None:
             return None
         c.execute("UPDATE jobs SET statut='en_cours', updated_at=? WHERE id=?", (db.now(), r["id"]))
         return db.row(r)
+
+
+def fail_job(job: dict, error: str) -> None:
+    with db.tx() as c:
+        db.add_event(c, job["user_id"], "error", f"Le robot a rencontré une erreur ({job['type']}) : {error}", job["application_id"])
+        if job["application_id"] and job["type"] in ("prepare", "submit"):
+            _set_app(c, job["application_id"], statut="echec", detail=error[:300])
 
 
 def _worker_loop() -> None:
@@ -339,24 +389,33 @@ def _worker_loop() -> None:
             continue
         try:
             HANDLERS[job["type"]](job)
-            statut, progress = "termine", ""
+            statut, msg = "termine", ""
         except Exception as e:
             traceback.print_exc()
-            statut, progress = "erreur", f"{type(e).__name__}: {e}"
-            with db.tx() as c:
-                db.add_event(c, job["user_id"], "error", f"Le robot a rencontré une erreur ({job['type']}) : {e}",
-                             job["application_id"])
-                if job["application_id"] and job["type"] in ("prepare", "submit"):
-                    _set_app(c, job["application_id"], statut="echec", detail=progress[:300])
+            statut, msg = "erreur", f"{type(e).__name__}: {e}"
+            fail_job(job, msg)
         with db.tx() as c:
-            c.execute("UPDATE jobs SET statut=?, progress=?, updated_at=? WHERE id=?",
-                      (statut, progress[:300], db.now(), job["id"]))
+            c.execute("UPDATE jobs SET statut=?, progress=?, updated_at=? WHERE id=?", (statut, msg[:300], db.now(), job["id"]))
+
+
+def release_stale(c) -> None:
+    """Extension fermée en pleine tâche : on la remet en file, sauf un envoi (il a peut-être eu lieu)."""
+    limit = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MIN)).isoformat(timespec="seconds")
+    for j in c.execute("SELECT * FROM jobs WHERE statut='en_cours' AND claimed_at<>'' AND claimed_at<?", (limit,)).fetchall():
+        if j["type"] == "submit":
+            c.execute("UPDATE jobs SET statut='erreur', progress='Navigateur fermé pendant l''envoi', updated_at=? WHERE id=?",
+                      (db.now(), j["id"]))
+            _set_app(c, j["application_id"], statut="incertaine",
+                     detail="Le navigateur s'est fermé pendant l'envoi : vérifie sur JobTeaser.")
+        else:
+            c.execute("UPDATE jobs SET statut='en_attente', claimed_at='', updated_at=? WHERE id=?", (db.now(), j["id"]))
 
 
 def _scheduler_loop() -> None:
     """Copilote : relance la recherche de chaque compte actif selon sa fréquence."""
     while not _stop.wait(60):
         with db.tx() as c:
+            release_stale(c)
             for p in c.execute("SELECT * FROM preferences WHERE paused=0").fetchall():
                 every = timedelta(hours=max(1, int(p["search_every_hours"] or 24)))
                 last = p["last_search_at"]

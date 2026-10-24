@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "CandiPilot",
+  "version": "0.1.0",
+  "description": "Ton copilote de candidatures : cherche et postule avec tes propres sessions (JobTeaser…), remplit n'importe quel formulaire.",
+  "permissions": ["storage", "alarms", "tabs", "scripting", "cookies", "activeTab"],
+  "host_permissions": [
+    "https://*.jobteaser.com/*",
+    "https://*.linkedin.com/*",
+    "https://*.welcometothejungle.com/*",
+    "https://*.onrender.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "CandiPilot" },
+  "icons": { "128": "icon128.png" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.onrender.com/*", "http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["link.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

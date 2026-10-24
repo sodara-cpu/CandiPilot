@@ -6,9 +6,8 @@ Rien ici n'envoie de candidature ; seul POST /api/launch (main.py) déclenche de
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
-from . import db
+from . import db, files
 
 # Robot simulé (tests, recette) : pas de vrai compte JobTeaser nécessaire.
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
@@ -17,7 +16,9 @@ FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
 def jobteaser_missing(pr: dict) -> str:
     if FAKE or pr["jobteaser_status"] == "connected":
         return ""
-    return "ta session JobTeaser (expirée : reconnecte-la)" if pr["jobteaser_status"] == "expired" else "ton compte JobTeaser connecté"
+    if pr["jobteaser_status"] == "expired":
+        return "ta session JobTeaser (expirée : reconnecte-toi à JobTeaser dans ton navigateur)"
+    return "l'extension CandiPilot et ta session JobTeaser ouverte dans ton navigateur"
 
 MODES = {
     "auto": ("Automatique", "Le robot remplit le formulaire, l'envoie et attend la preuve de réception."),
@@ -85,7 +86,7 @@ def blockers(c, a: dict, uid: str, pr: dict, missing_prof=None) -> tuple:
                                                 (a["cv_document_id"], uid)).fetchone()) or default_doc(c, uid, "cv")
     if not has_cv:
         b.append({"label": "Aucun CV", "href": "#/documents", "cta": "Importer"})
-    if s == "a_valider" and a["letter_needed"] != 0 and not (a["letter_path"] and Path(a["letter_path"]).exists()):
+    if s == "a_valider" and a["letter_needed"] != 0 and not files.exists(c, a["letter_path"]):
         b.append({"label": "Lettre de motivation manquante", "href": link, "cta": "Corriger"})
     open_q = [q for q in db.jload(a["questions"], []) if not q.get("answer", "").strip()]
     if open_q:

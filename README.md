@@ -152,14 +152,16 @@ Le lien fonctionne tant que le script tourne sur le Mac, et change à chaque lan
 « Mot de passe oublié » envoie un e-mail si `CANDIPILOT_SMTP_HOST` (+ `_PORT`, `_USER`, `_PASSWORD`, `_FROM`)
 est défini ; sinon le lien est écrit dans `data/server.log`.
 
-### Compte JobTeaser de chaque utilisateur
+### Extension CandiPilot : le robot dans le navigateur de chaque utilisateur
 
-Le robot travaille avec le compte JobTeaser **de la personne connectée**, jamais avec celui d'un autre :
-chaque utilisateur a son propre navigateur robot (`data/navigateurs/<id>`). À l'étape 3, il indique
-l'adresse JobTeaser de son école (ex. `https://skema.jobteaser.com`) puis clique « Connecter mon
-JobTeaser » : l'écran du navigateur robot s'affiche dans l'appli, il s'y connecte en cliquant et en
-tapant (SSO de l'école, double authentification…). La connexion est détectée seule ; CandiPilot ne
-voit ni ne garde le mot de passe. Sans compte connecté, aucune recherche ni aucun envoi réel.
+Le robot tourne dans l'extension Chrome de chaque utilisateur (dossier `extension/`), avec les sessions
+qu'il a déjà : rien à reconnecter, aucun mot de passe confié à CandiPilot. Installation : bouton
+« Télécharger l'extension » à l'étape 3, puis `chrome://extensions` → Mode développeur → « Charger
+l'extension non empaquetée ». Elle se relie seule au compte, vérifie les sites connectés (JobTeaser,
+LinkedIn, Welcome to the Jungle), exécute les recherches et candidatures JobTeaser, et remplit n'importe
+quel formulaire ouvert (bouton « Remplir ce formulaire », sans jamais l'envoyer).
+
+Hébergement : Render (`render.yaml`, `Dockerfile`, PostgreSQL). Détails : [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
 ### E-mails (mot de passe oublié)
 

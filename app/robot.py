@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -17,10 +17,9 @@ from src.config import Offer, Profile
 from src.letter_pdf import make_pdf
 from src.message import build_message
 
-from . import db
+from . import db, files
 
 YAML_PATH = db.ROOT / "config" / "profile.yaml"
-LETTERS_DIR = db.DATA_DIR / "letters"
 
 _yaml_cache: dict = {}
 
@@ -140,20 +139,22 @@ def draft_letter(ctx: dict, offer: dict) -> str:
     return build_message(to_profile(ctx), to_offer(offer))["body"]
 
 
-def render_letter(ctx: dict, offer: dict, text: str, app_id: str) -> str:
+def render_letter(conn, ctx: dict, offer: dict, text: str, app_id: str) -> str:
+    """Lettre PDF de la candidature, enregistrée dans la base ; renvoie sa référence (file:<id>)."""
     slug = re.sub(r"[^A-Za-z0-9]+", "_", f"{offer['entreprise']}_{offer['poste']}").strip("_")[:60]
-    out = LETTERS_DIR / app_id / f"Lettre_{slug}.pdf"
-    make_pdf(text, out, candidate_dict(ctx))
-    return str(out)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / f"Lettre_{slug}.pdf"
+        make_pdf(text, out, candidate_dict(ctx))
+        return files.save(conn, offer["user_id"], out.name, out.read_bytes())
 
 
-def copy_letter(doc, app_id: str) -> str:
-    """Copie la lettre importée dans le dossier de la candidature, sous son nom d'origine (vu par le recruteur)."""
+def copy_letter(conn, doc, user_id: str) -> str:
+    """Copie de la lettre importée pour la candidature, sous son nom d'origine (vu par le recruteur)."""
+    got = files.read(conn, doc["chemin"])
+    if not got:
+        return ""
     name = re.sub(r"[^\w.\- ]+", "_", Path(doc["name"]).name) or "Lettre.pdf"
-    out = LETTERS_DIR / app_id / (name if name.lower().endswith(".pdf") else name + ".pdf")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(doc["chemin"], out)
-    return str(out)
+    return files.save(conn, user_id, name if name.lower().endswith(".pdf") else name + ".pdf", got[1])
 
 
 def default_cv(conn, user_id: str):
@@ -175,7 +176,7 @@ def import_yaml(conn, user_id: str) -> list:
                  (clean(cand.get("first_name")), clean(cand.get("last_name")), clean(cand.get("phone")),
                   clean(cand.get("linkedin")), clean(cand.get("location")), clean(cand.get("school")),
                   clean(cand.get("program")), clean(ans.get("gender")), clean(ans.get("availability")),
-                  default_letter_template(), user_id))
+                  ((y.get("cover_letter") or {}).get("body") or "").strip() or default_letter_template(), user_id))
     done.append("profil")
     s = y.get("search") or {}
     if s:
@@ -187,11 +188,12 @@ def import_yaml(conn, user_id: str) -> list:
         done.append("critères de recherche")
     cv = clean((y.get("documents") or {}).get("cv"))
     if cv and Path(cv).expanduser().exists():
-        exists = conn.execute("SELECT 1 FROM documents WHERE user_id=? AND chemin=?", (user_id, cv)).fetchone()
+        path = Path(cv).expanduser()
+        exists = conn.execute("SELECT 1 FROM documents WHERE user_id=? AND type='cv' AND name=?", (user_id, path.name)).fetchone()
         if not exists:
             conn.execute("UPDATE documents SET is_default=0 WHERE user_id=? AND type='cv'", (user_id,))
             conn.execute("""INSERT INTO documents(id,user_id,type,name,chemin,version,is_default,created_at)
                             VALUES (?,?,?,?,?,1,1,?)""",
-                         (db.new_id(), user_id, "cv", Path(cv).name, str(Path(cv).expanduser()), db.now()))
+                         (db.new_id(), user_id, "cv", path.name, files.save(conn, user_id, path.name, path.read_bytes()), db.now()))
         done.append("CV")
     return done

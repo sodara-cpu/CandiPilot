@@ -27,6 +27,55 @@ jobs:
       - name: Tests (API, parcours, interface)
         run: PY=python ./tests/run_all.sh
 
+  postgres:
+    # Mêmes tests de l'API et du parcours, sur PostgreSQL (la base de Render).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: candipilot
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/candipilot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Dépendances
+        run: |
+          python -m pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+          cp config/profile.example.yaml config/profile.yaml
+      - name: Tests sur PostgreSQL
+        run: |
+          export CANDIPILOT_FAKE_ROBOT=1 CANDIPILOT_DATA=$(mktemp -d)
+          python -m uvicorn app.main:app --port 8765 > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8765/healthz && break; sleep 1; done
+          python tests/test_api.py http://127.0.0.1:8765
+          python tests/test_workflow.py http://127.0.0.1:8765 server.log
+
+  docker:
+    # Image de production (Render) : construction puis essai d'une lettre PDF dans le conteneur.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construction de l'image
+        run: docker build -t candipilot .
+      - name: Essai du conteneur
+        run: |
+          docker run -d --name cp -p 8000:8000 -e CANDIPILOT_FAKE_ROBOT=1 candipilot
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8000/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:8000/ | grep -q CandiPilot
+          curl -sf -o ext.zip http://127.0.0.1:8000/extension.zip && unzip -l ext.zip | grep -q manifest.json
+          python3 tests/test_api.py http://127.0.0.1:8000 || (docker logs cp; exit 1)
+
   apprentissage:
     # Mini-projet de deep learning : sites générés en local, aucun vrai site visité.
     runs-on: ubuntu-latest
