@@ -200,3 +200,9 @@ textarea{min-height:110px;resize:vertical;line-height:1.5}
 .yn{border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin:0;display:grid;gap:6px}
 .yn legend{font-weight:600;padding:0 4px}
 tr.selrow td{background:var(--violet-bg)}
+
+/* Connexion à distance (JobTeaser) */
+.modal.wide{width:min(1180px,calc(100vw - 32px));max-width:none}
+.rv{border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:#f2f3f7;cursor:pointer;outline:none;min-height:200px}
+.rv:focus{box-shadow:0 0 0 3px var(--violet-bg);border-color:var(--violet)}
+.rv img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none}

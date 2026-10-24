@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, matching, robot, worker, workflow
+from . import auth, db, matching, remote, robot, worker, workflow
 
 STATIC = Path(__file__).parent / "static"
 UPLOADS = db.DATA_DIR / "uploads"
@@ -32,7 +32,19 @@ CurrentUser = Depends(auth.current_user)
 @app.on_event("startup")
 def _startup() -> None:
     db.init()
+    _adopt_owner_jobteaser()
     worker.start()
+
+
+def _adopt_owner_jobteaser() -> None:
+    """Le propriétaire garde la session SKEMA du robot en ligne de commande (.user-profile)."""
+    if worker.FAKE or not robot.OWNER_PROFILE.exists():
+        return
+    with db.tx() as c:
+        first = c.execute("SELECT id FROM users ORDER BY created_at, rowid LIMIT 1").fetchone()
+        if first and not (robot.BROWSERS_DIR / first["id"]).exists():
+            c.execute("""UPDATE preferences SET jobteaser_url=COALESCE(NULLIF(jobteaser_url,''), 'https://skema.jobteaser.com'),
+                         jobteaser_status=COALESCE(NULLIF(jobteaser_status,''), 'connected') WHERE user_id=?""", (first["id"],))
 
 
 @app.on_event("shutdown")
@@ -226,6 +238,7 @@ def delete_account(body: DeleteAccountIn, response: Response, user=CurrentUser):
         app_ids = [r["id"] for r in c.execute("SELECT id FROM applications WHERE user_id=?", (user["id"],))]
         c.execute("DELETE FROM users WHERE id=?", (user["id"],))
     shutil.rmtree(UPLOADS / user["id"], ignore_errors=True)
+    shutil.rmtree(robot.BROWSERS_DIR / user["id"], ignore_errors=True)   # navigateur robot (cookies JobTeaser)
     for app_id in app_ids:
         shutil.rmtree(robot.LETTERS_DIR / app_id, ignore_errors=True)
     response.delete_cookie(auth.COOKIE, path="/")
@@ -436,8 +449,11 @@ def copilot(action: str, user=CurrentUser):
 @app.post("/api/search", status_code=202)
 def launch_search(user=CurrentUser):
     with db.tx() as c:
-        if not db.jload(c.execute("SELECT metiers FROM preferences WHERE user_id=?", (user["id"],)).fetchone()["metiers"], []):
+        p = c.execute("SELECT metiers, jobteaser_status FROM preferences WHERE user_id=?", (user["id"],)).fetchone()
+        if not db.jload(p["metiers"], []):
             raise HTTPException(422, "Ajoute au moins un métier ciblé dans tes critères.")
+        if not worker.FAKE and p["jobteaser_status"] != "connected":
+            raise HTTPException(422, "Connecte d'abord ton compte JobTeaser (bouton « Connecter mon JobTeaser »).")
         jid = worker.enqueue(c, user["id"], "search")
     return {"job_id": jid}
 
@@ -447,6 +463,125 @@ def list_jobs(user=CurrentUser):
     with db.tx() as c:
         return db.rows(c.execute("""SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 20""",
                                  (user["id"],)))
+
+
+# ===================== Compte JobTeaser de l'utilisateur (connexion à distance) =====================
+
+class PortalIn(BaseModel):
+    portal_url: str
+
+
+class RemoteInput(BaseModel):
+    action: str
+    x: float = 0
+    y: float = 0
+    text: str = ""
+    key: str = ""
+    dy: float = 0
+
+
+def _jobteaser_state(c, uid: str) -> dict:
+    p = c.execute("SELECT jobteaser_url, jobteaser_status, jobteaser_at FROM preferences WHERE user_id=?", (uid,)).fetchone()
+    s = remote.get(uid)
+    return {"portal_url": p["jobteaser_url"] or robot.DEFAULT_PORTAL, "status": p["jobteaser_status"] or "",
+            "connected_at": p["jobteaser_at"], "session": s.info() if s else None, "required": not worker.FAKE}
+
+
+@app.get("/api/jobteaser")
+def jobteaser_state(user=CurrentUser):
+    with db.tx() as c:
+        return _jobteaser_state(c, user["id"])
+
+
+@app.put("/api/jobteaser")
+def jobteaser_portal(body: PortalIn, user=CurrentUser):
+    """Portail JobTeaser de l'école (ex. https://skema.jobteaser.com) ou https://www.jobteaser.com."""
+    url = body.portal_url.strip().rstrip("/")
+    if not url.startswith("http"):
+        url = "https://" + url
+    host = url.split("/")[2] if url.count("/") >= 2 else ""
+    fake_portal = worker.FAKE and host.startswith("127.0.0.1")     # faux portail des tests
+    if not (host == "jobteaser.com" or host.endswith(".jobteaser.com")) and not fake_portal:
+        raise HTTPException(422, "Adresse JobTeaser attendue, par exemple https://monecole.jobteaser.com")
+    if not fake_portal:
+        url = "/".join(url.split("/")[:3])                         # le portail = l'adresse du site de l'école
+    with db.tx() as c:
+        old = c.execute("SELECT jobteaser_url FROM preferences WHERE user_id=?", (user["id"],)).fetchone()["jobteaser_url"]
+        c.execute("UPDATE preferences SET jobteaser_url=? WHERE user_id=?", (url, user["id"]))
+        if old and old != url:      # autre portail : il faudra se reconnecter
+            c.execute("UPDATE preferences SET jobteaser_status='' WHERE user_id=?", (user["id"],))
+        return _jobteaser_state(c, user["id"])
+
+
+@app.post("/api/jobteaser/connect", status_code=202)
+def jobteaser_connect(user=CurrentUser):
+    remote.start(user["id"])
+    with db.tx() as c:
+        return _jobteaser_state(c, user["id"])
+
+
+@app.get("/api/jobteaser/screen")
+def jobteaser_screen(user=CurrentUser):
+    s = remote.get(user["id"])
+    if not s or not s.screen:
+        raise HTTPException(404, "Écran pas encore disponible.")
+    return Response(s.screen, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/jobteaser/input")
+def jobteaser_input(body: RemoteInput, user=CurrentUser):
+    s = remote.get(user["id"])
+    if not s:
+        raise HTTPException(409, "Aucune connexion en cours : clique d'abord « Connecter mon JobTeaser ».")
+    if body.action not in ("click", "type", "key", "scroll", "back", "reload"):
+        raise HTTPException(422, "Action inconnue.")
+    if body.action == "click" and not (0 <= body.x <= 1 and 0 <= body.y <= 1):
+        raise HTTPException(422, "Clic hors de l'écran.")
+    s.send(body.dict())
+    return s.info()
+
+
+@app.post("/api/jobteaser/cancel")
+def jobteaser_cancel(user=CurrentUser):
+    remote.stop(user["id"])
+    return {"ok": True}
+
+
+@app.delete("/api/jobteaser")
+def jobteaser_disconnect(user=CurrentUser):
+    """Oublie la session : le profil de navigateur de l'utilisateur est effacé."""
+    remote.stop(user["id"])
+    own = robot.BROWSERS_DIR / user["id"]
+    shutil.rmtree(own, ignore_errors=True)
+    own.mkdir(parents=True, exist_ok=True)       # (le propriétaire quitte aussi l'ancien profil partagé)
+    with db.tx() as c:
+        c.execute("UPDATE preferences SET jobteaser_status='', jobteaser_at='' WHERE user_id=?", (user["id"],))
+        return _jobteaser_state(c, user["id"])
+
+
+if worker.FAKE:
+    # Faux portail JobTeaser pour les tests (robot simulé uniquement) : connexion puis liste d'offres.
+    @app.get("/fake-jobteaser/fr/job-offers", include_in_schema=False)
+    def fake_offers(request: Request):
+        if request.cookies.get("fakejt") != "1":
+            return RedirectResponse("/fake-jobteaser/login")
+        cards = "".join(f'<div data-testid="jobad-card"><h3><a href="#">Offre {i}</a></h3></div>' for i in range(3))
+        return HTMLResponse(f"<html><head><title>Offres</title></head><body><h1>Offres</h1>{cards}</body></html>")
+
+    @app.get("/fake-jobteaser/login", include_in_schema=False)
+    def fake_login_page():
+        return HTMLResponse("""<html><head><title>Connexion</title></head><body style="font:20px sans-serif">
+          <form method="post" action="/fake-jobteaser/login" style="margin:80px">
+          <input name="email" placeholder="E-mail" style="display:block;font-size:20px;margin:10px;width:400px">
+          <input name="password" type="password" placeholder="Mot de passe" style="display:block;font-size:20px;margin:10px;width:400px">
+          <button style="font-size:20px;margin:10px;width:400px;height:50px">Se connecter</button></form></body></html>""")
+
+    @app.post("/fake-jobteaser/login", include_in_schema=False)
+    def fake_login(password: str = Form("")):
+        r = RedirectResponse("/fake-jobteaser/fr/job-offers", status_code=303)
+        if password == "bonmotdepasse":
+            r.set_cookie("fakejt", "1", max_age=3600)
+        return r
 
 
 # ===================== Offres (F04, F05) =====================
@@ -881,6 +1016,8 @@ def launch(user=CurrentUser):
             raise HTTPException(422, "Choisis d'abord ton mode de soumission (étape 4).")
         if pr["default_mode"] in ("assisted", "manual") and -1 in (pr["want_prepare"], pr["want_review"]):
             raise HTTPException(422, "Réponds aux deux questions de l'étape 4 (préparation et relecture).")
+        if workflow.jobteaser_missing(pr):
+            raise HTTPException(422, "Il manque " + workflow.jobteaser_missing(pr) + " (étape 3).")
         if workflow.missing_documents(c, uid, pr):
             raise HTTPException(422, "Il manque : " + ", ".join(workflow.missing_documents(c, uid, pr)) + ".")
         mprof = workflow.missing_profile(c, uid)

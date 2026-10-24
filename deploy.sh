@@ -8,6 +8,7 @@
 # E-mails (mot de passe oublié) : définir CANDIPILOT_SMTP_HOST, _PORT, _USER, _PASSWORD, _FROM ;
 # sans SMTP, les liens sont écrits dans <dossier de données>/server.log.
 cd "$(dirname "$0")"
+[ -f .env ] && { set -a; . ./.env; set +a; }   # réglages privés (e-mails…)
 ENV=${1:-production}
 case "$ENV" in
   production) PORT=8000; DATA=data;         FAKE=0; BRANCH=main ;;

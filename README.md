@@ -152,6 +152,20 @@ Le lien fonctionne tant que le script tourne sur le Mac, et change à chaque lan
 « Mot de passe oublié » envoie un e-mail si `CANDIPILOT_SMTP_HOST` (+ `_PORT`, `_USER`, `_PASSWORD`, `_FROM`)
 est défini ; sinon le lien est écrit dans `data/server.log`.
 
+### Compte JobTeaser de chaque utilisateur
+
+Le robot travaille avec le compte JobTeaser **de la personne connectée**, jamais avec celui d'un autre :
+chaque utilisateur a son propre navigateur robot (`data/navigateurs/<id>`). À l'étape 3, il indique
+l'adresse JobTeaser de son école (ex. `https://skema.jobteaser.com`) puis clique « Connecter mon
+JobTeaser » : l'écran du navigateur robot s'affiche dans l'appli, il s'y connecte en cliquant et en
+tapant (SSO de l'école, double authentification…). La connexion est détectée seule ; CandiPilot ne
+voit ni ne garde le mot de passe. Sans compte connecté, aucune recherche ni aucun envoi réel.
+
+### E-mails (mot de passe oublié)
+
+Copier `.env.example` en `.env` (jamais publié) et le remplir, par exemple avec un mot de passe
+d'application Gmail. Tester : `set -a; . ./.env; set +a; .venv/bin/python -m app.mailtest ton@email.fr`.
+
 ### Parcours du candidat (5 étapes)
 
 1. **Profil** — prénom, nom, téléphone, disponibilité, genre obligatoires.

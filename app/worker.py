@@ -22,7 +22,7 @@ import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from . import db, matching, robot
+from . import db, matching, remote, robot
 
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
 POLL_S = 2
@@ -62,6 +62,28 @@ def _load_app(c, app_id: str):
     return db.row(r)
 
 
+# ---------- compte JobTeaser de l'utilisateur ----------
+
+def _jobteaser_ready(uid: str, app_id: str = "") -> bool:
+    """Le robot réel n'agit qu'avec le compte JobTeaser de l'utilisateur, jamais avec celui d'un autre."""
+    with db.tx() as c:
+        st = c.execute("SELECT jobteaser_status FROM preferences WHERE user_id=?", (uid,)).fetchone()["jobteaser_status"]
+        if st == "connected":
+            return True
+        msg = ("Ta session JobTeaser a expiré" if st == "expired" else "Ton compte JobTeaser n'est pas connecté") + \
+              " : connecte-le à l'étape 3 (Critères et offres)."
+        db.add_event(c, uid, "error", msg, app_id)
+        if app_id:
+            _set_app(c, app_id, statut="echec", detail=msg)
+    return False
+
+
+def _session(uid: str):
+    from src.browser import browser_session
+    with db.tx() as c:
+        return browser_session(robot.browser_settings(c, uid))
+
+
 # ---------- tâches ----------
 
 def run_search(job: dict) -> None:
@@ -79,12 +101,17 @@ def run_search(job: dict) -> None:
         found, stats = _fake_search(cfg, known), {"external": 0, "date": 0, "login": True}
     else:
         from src.search import collect
-        found, stats = collect(robot.browser_settings(), cfg, known, robot.default_domain_lines(),
+        if not _jobteaser_ready(uid):
+            return
+        with db.tx() as c:
+            settings = robot.browser_settings(c, uid)
+        found, stats = collect(settings, cfg, known, robot.default_domain_lines(),
                                log=lambda m: _progress(job["id"], m))
 
     with db.tx() as c:
         if not stats["login"]:
-            db.add_event(c, uid, "error", "Connexion JobTeaser non détectée : connecte-toi dans la fenêtre du robot puis relance.")
+            c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
+            db.add_event(c, uid, "error", "Ta session JobTeaser a expiré : reconnecte ton compte (étape 3) puis relance la recherche.")
             return
         min_score = int(ctx["prefs"].get("min_score") or 50)
         kept = 0
@@ -134,6 +161,8 @@ def run_prepare(job: dict) -> None:
         _progress(job["id"], "Lettre adaptée générée")
         pdf = robot.render_letter(ctx, a, text, app_id)
 
+    if not FAKE and a["apply_type"] == "jobteaser" and not _jobteaser_ready(uid, app_id):
+        return
     info = _inspect(a, ctx, job["id"])
     with db.tx() as c:
         questions = db.jload(a["questions"], [])
@@ -164,9 +193,8 @@ def _inspect(a: dict, ctx: dict, job_id: str) -> dict:
         return {"kind": "external", "letter": False, "questions": [],
                 "detail": "Candidature sur le site de l'entreprise : envoi manuel."}
     from src.adapters.jobteaser import JobTeaserAdapter
-    from src.browser import browser_session
     _progress(job_id, "Lecture du formulaire JobTeaser")
-    with browser_session(robot.browser_settings()) as bctx:
+    with _session(a["user_id"]) as bctx:
         page = bctx.pages[0] if bctx.pages else bctx.new_page()
         page.goto(a["url"], wait_until="domcontentloaded")
         page.wait_for_timeout(5000)
@@ -194,6 +222,8 @@ def run_submit(job: dict) -> None:
     mode = a["mode"] if a["mode"] in ("auto", "assisted") else "auto"
     _progress(job["id"], "Envoi automatique" if mode == "auto" else "Envoi assisté : à toi de cliquer « Postuler »")
 
+    if not FAKE and a["apply_type"] == "jobteaser" and not _jobteaser_ready(uid, app_id):
+        return
     if FAKE:
         status, detail = "submitted", f"envoi simulé ({mode})"
     else:
@@ -215,13 +245,12 @@ def run_submit(job: dict) -> None:
 def _submit_real(a: dict, ctx: dict, cv_path: str, screening: dict, mode: str) -> tuple:
     from src.adapters import pick_adapter
     from src.adapters.jobteaser import JobTeaserAdapter
-    from src.browser import browser_session
 
     profile = robot.to_profile(ctx, cv_path=cv_path, screening=screening)
     offer = robot.to_offer(a)
     message = {"body": a["letter_text"], "pdf_path": a["letter_path"]}
     adapter = pick_adapter(offer)
-    with browser_session(robot.browser_settings()) as bctx:
+    with _session(a["user_id"]) as bctx:
         page = bctx.pages[0] if bctx.pages else bctx.new_page()
         page.goto(a["url"], wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
@@ -249,10 +278,11 @@ def run_verify(job: dict) -> None:
     if not a:
         return
     ok = True
+    if not FAKE and not _jobteaser_ready(uid):
+        return
     if not FAKE:
-        from src.browser import browser_session
         from src.adapters.jobteaser import ALREADY_APPLIED
-        with browser_session(robot.browser_settings()) as bctx:
+        with _session(uid) as bctx:
             page = bctx.pages[0] if bctx.pages else bctx.new_page()
             page.goto(a["url"], wait_until="domcontentloaded")
             page.wait_for_timeout(5000)
@@ -291,7 +321,10 @@ HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, 
 
 def _next_job():
     with db.tx() as c:
-        r = c.execute("SELECT * FROM jobs WHERE statut='en_attente' ORDER BY created_at LIMIT 1").fetchone()
+        # Les tâches d'un utilisateur en train de connecter son JobTeaser attendent (même navigateur).
+        busy = sorted(remote.active_users())
+        r = c.execute(f"""SELECT * FROM jobs WHERE statut='en_attente'
+                          AND user_id NOT IN ({','.join('?' * len(busy))}) ORDER BY created_at LIMIT 1""", busy).fetchone()
         if r is None:
             return None
         c.execute("UPDATE jobs SET statut='en_cours', updated_at=? WHERE id=?", (db.now(), r["id"]))
@@ -328,7 +361,8 @@ def _scheduler_loop() -> None:
                 every = timedelta(hours=max(1, int(p["search_every_hours"] or 24)))
                 last = p["last_search_at"]
                 due = not last or datetime.fromisoformat(last) + every <= datetime.now(timezone.utc)
-                if due and db.jload(p["metiers"], []):
+                ready = FAKE or p["jobteaser_status"] == "connected"     # jamais avec le compte d'un autre
+                if due and ready and db.jload(p["metiers"], []):
                     enqueue(c, p["user_id"], "search")
                     c.execute("UPDATE preferences SET last_search_at=? WHERE user_id=?", (db.now(), p["user_id"]))
 

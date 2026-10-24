@@ -79,10 +79,11 @@ def browser_session(settings: dict):
                 context.close()
             return
 
-        # mode "persistent" (défaut)
-        PROFILE_DIR.mkdir(exist_ok=True)
+        # mode "persistent" (défaut) ; browser.user_data_dir : un profil par utilisateur (application web)
+        profile = Path(bconf.get("user_data_dir") or PROFILE_DIR)
+        profile.mkdir(parents=True, exist_ok=True)
         context = p.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
+            user_data_dir=str(profile),
             headless=headless,
             viewport={"width": 1366, "height": 900},
             accept_downloads=True,

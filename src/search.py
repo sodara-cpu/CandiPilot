@@ -137,6 +137,7 @@ def collect(settings: dict, cfg: dict, known: set, domain_lines: dict, log=print
     Utilisé par la commande ci-dessous et par l'application web (app/worker.py).
     `known` : URL déjà connues (jamais renvoyées). `log` : fonction de suivi.
     """
+    base = (cfg.get("base_url") or BASE).rstrip("/")   # portail JobTeaser de l'utilisateur (école)
     keywords = cfg.get("keywords") or []
     max_pages = int(cfg.get("max_pages", 3))
     include_external = bool(cfg.get("include_external", False))
@@ -148,7 +149,7 @@ def collect(settings: dict, cfg: dict, known: set, domain_lines: dict, log=print
 
     with browser_session(settings) as ctx:
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        first_url = f"{BASE}/fr/job-offers?q={quote_plus(keywords[0])}"
+        first_url = f"{base}/fr/job-offers?q={quote_plus(keywords[0])}"
         if not _wait_for_login(page, first_url):
             stats["login"] = False
             return found, stats
@@ -156,7 +157,7 @@ def collect(settings: dict, cfg: dict, known: set, domain_lines: dict, log=print
         for kw in keywords:
             log(f"Recherche « {kw} »")
             for n in range(1, max_pages + 1):
-                page.goto(f"{BASE}/fr/job-offers?q={quote_plus(kw)}&page={n}",
+                page.goto(f"{base}/fr/job-offers?q={quote_plus(kw)}&page={n}",
                           wait_until="domcontentloaded")
                 try:
                     page.wait_for_selector('[data-testid="jobad-card"]', timeout=15000)
@@ -166,7 +167,7 @@ def collect(settings: dict, cfg: dict, known: set, domain_lines: dict, log=print
                 if not cards:
                     break
                 for c in cards:
-                    url = BASE + c["href"] if c["href"].startswith("/") else c["href"]
+                    url = base + c["href"] if c["href"].startswith("/") else c["href"]
                     if not c["href"] or url in known or not _matches(c, cfg):
                         continue
                     if not c["easy"] and not include_external:

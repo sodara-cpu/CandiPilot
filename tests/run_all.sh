@@ -20,4 +20,5 @@ done
 echo "== API";       $PY tests/test_api.py "http://127.0.0.1:$PORT"
 echo "== Parcours";  $PY tests/test_workflow.py "http://127.0.0.1:$PORT" "$TMP/server.log"
 echo "== Interface"; $PY tests/test_ui.py "http://127.0.0.1:$PORT" "$TMP/ui"
+echo "== JobTeaser"; $PY tests/test_jobteaser.py "http://127.0.0.1:$PORT"
 echo "Tous les tests sont passés."

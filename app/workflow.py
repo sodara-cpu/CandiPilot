@@ -5,9 +5,19 @@ Rien ici n'envoie de candidature ; seul POST /api/launch (main.py) déclenche de
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from . import db
+
+# Robot simulé (tests, recette) : pas de vrai compte JobTeaser nécessaire.
+FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
+
+
+def jobteaser_missing(pr: dict) -> str:
+    if FAKE or pr["jobteaser_status"] == "connected":
+        return ""
+    return "ta session JobTeaser (expirée : reconnecte-la)" if pr["jobteaser_status"] == "expired" else "ton compte JobTeaser connecté"
 
 MODES = {
     "auto": ("Automatique", "Le robot remplit le formulaire, l'envoie et attend la preuve de réception."),
@@ -166,6 +176,7 @@ def launch_state(c, uid: str) -> dict:
         "cv": {"id": cv["id"], "name": cv["name"], "version": cv["version"]} if cv else None,
         "letter": {"id": letter["id"], "name": letter["name"], "version": letter["version"]} if letter else None,
         "missing_profile": mprof, "missing_documents": missing_documents(c, uid, pr),
+        "missing_jobteaser": jobteaser_missing(pr),
         "items": items, "ready_count": sum(1 for i in items if i["ready"]), "results": results, "busy": busy,
     }
 
@@ -187,6 +198,8 @@ def guide(c, uid: str) -> dict:
     launched_any = any(res[k] for k in res)
 
     crit_missing = []
+    if jobteaser_missing(pr):
+        crit_missing.append(jobteaser_missing(pr))
     if not pr["metiers"]:
         crit_missing.append("au moins un métier")
     if not n_selected:

@@ -6,6 +6,7 @@ fonctionne à l'identique en ligne de commande et depuis l'application.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -35,18 +36,60 @@ def default_domain_lines() -> dict:
 
 
 def default_letter_template() -> str:
-    body = (yaml_profile().get("cover_letter") or {}).get("body", "")
-    return body.strip() or (
-        "Madame, Monsieur,\n\nJe me permets de vous adresser ma candidature au poste « {role} » "
-        "au sein {de_company}.\n\nJe serais ravi d'échanger avec vous.\n\nBien à vous,\n")
+    """Modèle neutre pour un nouveau compte (la lettre personnelle de config/profile.yaml n'est jamais partagée)."""
+    return ("Madame, Monsieur,\n\nJe me permets de vous adresser ma candidature au poste « {role} » "
+            "au sein {de_company}. Mon parcours m'a préparé à {domain_line}, et je serais heureux de mettre "
+            "ma rigueur et ma motivation au service de vos équipes.\n\n"
+            "Je reste à votre disposition pour un entretien.\n\nBien à vous,\n")
 
 
-def browser_settings() -> dict:
-    """Réglages navigateur du robot : Chromium dédié, fenêtre visible (connexion SKEMA possible)."""
-    s = dict(yaml_profile().get("settings") or {})
+# ---------- navigateur et compte JobTeaser de chaque utilisateur ----------
+
+BROWSERS_DIR = db.DATA_DIR / "navigateurs"
+OWNER_PROFILE = db.ROOT / ".user-profile"      # profil historique du robot en ligne de commande
+DEFAULT_PORTAL = "https://www.jobteaser.com"
+LOGIN_WORDS = re.compile(r"se connecter|connexion|log ?in|sign ?in|s'identifier", re.I)
+
+
+def is_owner(conn, user_id: str) -> bool:
+    first = conn.execute("SELECT id FROM users ORDER BY created_at, rowid LIMIT 1").fetchone()
+    return bool(first) and first["id"] == user_id
+
+
+def profile_dir(conn, user_id: str) -> Path:
+    """Dossier du navigateur robot de l'utilisateur : ses cookies JobTeaser, à lui seul."""
+    own = BROWSERS_DIR / user_id
+    fake = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"     # tests / recette : jamais le vrai profil
+    if not fake and not own.exists() and OWNER_PROFILE.exists() and is_owner(conn, user_id):
+        return OWNER_PROFILE
+    return own
+
+
+def portal(conn, user_id: str) -> str:
+    r = conn.execute("SELECT jobteaser_url FROM preferences WHERE user_id=?", (user_id,)).fetchone()
+    return ((r and r["jobteaser_url"]) or DEFAULT_PORTAL).rstrip("/")
+
+
+def browser_settings(conn=None, user_id: str = "") -> dict:
+    """Réglages du robot : Chromium dédié à l'utilisateur, fenêtre visible (Cloudflare bloque l'invisible)."""
+    s = dict(yaml_profile().get("settings") or {}) if (conn is None or is_owner(conn, user_id)) else {}
     s["browser"] = {"mode": "persistent"}
+    if conn is not None:
+        s["browser"]["user_data_dir"] = str(profile_dir(conn, user_id))
     s["headless"] = False
     return s
+
+
+def logged_in(page) -> bool:
+    """Page des offres affichée, sans formulaire ni lien de connexion : la session JobTeaser est ouverte."""
+    try:
+        return ("/job-offers" in page.url
+                and page.locator('[data-testid="jobad-card"]').count() > 0
+                and page.locator("input[type=password]").count() == 0
+                and page.get_by_role("link", name=LOGIN_WORDS).count() == 0
+                and page.get_by_role("button", name=LOGIN_WORDS).count() == 0)
+    except Exception:
+        return False
 
 
 def load_context(conn, user_id: str) -> dict:
@@ -88,7 +131,8 @@ def search_cfg(prefs: dict) -> dict:
     return {"keywords": prefs.get("metiers") or [], "contract_contains": prefs.get("contrats") or [],
             "location_contains": prefs.get("zones") or [], "start_from": prefs.get("start_from") or "",
             "max_pages": int(prefs.get("max_pages") or 3),
-            "include_external": bool(prefs.get("include_external"))}
+            "include_external": bool(prefs.get("include_external")),
+            "base_url": (prefs.get("jobteaser_url") or DEFAULT_PORTAL).rstrip("/")}
 
 
 def draft_letter(ctx: dict, offer: dict) -> str:

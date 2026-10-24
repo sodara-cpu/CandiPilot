@@ -19,3 +19,4 @@ data/
 data-recette/
 apprentissage/donnees/
 apprentissage/modeles/sauvegardes/
+.env

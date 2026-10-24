@@ -97,12 +97,14 @@ Le même script tourne en local (`./tests/run_all.sh`) et sur GitHub.
 | `CANDIPILOT_PUBLIC_URL` | adresse publique utilisée dans les e-mails (mise par `deploy.sh`) |
 | `CANDIPILOT_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_FROM` | envoi des e-mails « mot de passe oublié » ; sans eux, le lien est écrit dans `server.log` |
 
+Ces réglages privés se mettent dans `.env` (modèle : `.env.example`), chargé par `start.sh` et `deploy.sh`.
+
 ## Données et sécurité
 
-- Jamais publiés sur GitHub (`.gitignore`) : `.user-profile/` (cookies JobTeaser/SKEMA),
+- Chaque utilisateur connecte son propre JobTeaser (connexion à distance, étape 3) ; ses cookies restent
+  dans `data/navigateurs/<id>`. Le robot réel n'agit jamais sans le compte de la personne connectée.
+- Jamais publiés sur GitHub (`.gitignore`) : `.env`, `.user-profile/` (cookies JobTeaser/SKEMA),
   `config/profile.yaml`, `config/offers.csv`, `data/`, `data-recette/`, `output/`.
-- La production postule avec la session JobTeaser du propriétaire : l'inscription est ouverte,
-  le lien de production ne doit donc être partagé qu'avec des personnes de confiance.
 - Sauvegarde : copier `data/` (base SQLite, CV, lettres) avec l'application arrêtée.
 
 ## Limites connues

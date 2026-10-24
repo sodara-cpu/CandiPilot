@@ -169,6 +169,9 @@ MIGRATIONS = {
         "want_prepare": "INTEGER DEFAULT -1",     # personnaliser les dossiers : -1 non répondu, 0 non, 1 oui
         "want_review": "INTEGER DEFAULT -1",      # relire chaque dossier avant l'envoi
         "letter_source": "TEXT DEFAULT ''",       # document (lettre PDF importée) | template (modèle adapté)
+        "jobteaser_url": "TEXT DEFAULT ''",       # portail JobTeaser de l'utilisateur (ex. https://skema.jobteaser.com)
+        "jobteaser_status": "TEXT DEFAULT ''",    # '' jamais connecté | connected | expired
+        "jobteaser_at": "TEXT DEFAULT ''",
     },
     "applications": {
         "selected": "INTEGER DEFAULT 0",          # offre choisie par le candidat (étape 3)
