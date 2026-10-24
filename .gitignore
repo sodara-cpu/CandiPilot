@@ -1,0 +1,18 @@
+# Environnements Python
+.venv/
+.venv-1/
+__pycache__/
+*.pyc
+
+# Session du navigateur du robot (cookies de connexion JobTeaser/SKEMA) — NE JAMAIS PUBLIER
+.user-profile/
+
+# Données personnelles
+config/profile.yaml
+config/offers.csv
+*.bak
+*.bak2
+output/
+data/
+
+.DS_Store

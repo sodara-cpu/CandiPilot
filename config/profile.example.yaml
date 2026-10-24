@@ -1,0 +1,104 @@
+# Profil du candidat — complète les champs entre < >.
+candidate:
+  first_name: "<Prénom>"
+  last_name: "<Nom>"
+  full_name: "<Prénom Nom>"
+  email: "<ton.email@example.com>"
+  phone: "<+33 ...>"
+  linkedin: "<https://www.linkedin.com/in/...>"
+  location: "Paris, France"
+  school: "SKEMA Business School"
+  program: "Master Corporate Financial Management (électif Quantitative Finance)"
+
+# Fichiers joints. Mets les chemins ABSOLUS vers tes PDF.
+documents:
+  cv: "</chemin/absolu/vers/CV.pdf>"
+  # Optionnel : lettre de recommandation, portfolio, etc.
+  recommendation: ""
+
+# Modèle de message de motivation. {role}, {company}, {de_company}, {domain_line} sont remplacés.
+# Style validé : sobre, factuel, sans le mot "actuellement".
+cover_letter:
+  subject: "Candidature - {role} (stage de 6 mois, à partir de mars 2027)"
+  body: |
+    Madame, Monsieur,
+
+    Je me permets de vous adresser ma candidature au poste « {role} » au sein {de_company}, pour une durée de six mois.
+
+    <Paragraphe sur ton parcours et tes expériences.>
+
+    <Paragraphe sur ce qui te relie au poste.> Cette rigueur me permettrait de contribuer rapidement à {domain_line}.
+
+    Je serais ravi d'échanger avec vous. Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées.
+
+    <Prénom NOM>
+
+# Phrase de "rattachement au poste" selon le domaine de l'offre (3e paragraphe).
+# La clé est comparée en minuscules au champ `domain` de l'offre (correspondance partielle).
+domain_lines:
+  private debt: "l'analyse crédit et au suivi de portefeuille en dette privée"
+  credit:       "l'analyse crédit et au suivi de portefeuille"
+  capital markets: "l'activité de marchés de capitaux"
+  sales trading:  "les activités de Sales & Trading"
+  markets:        "les activités de marchés financiers"
+  asset management: "la gestion d'actifs et au suivi de portefeuille"
+  private equity: "l'analyse d'investissement en private equity"
+  venture:        "l'analyse d'investissement et au suivi de participations"
+  m&a:            "l'exécution d'opérations de M&A"
+  corporate finance: "l'analyse financière et à la structuration"
+  project finance:   "l'analyse et à la modélisation de financements de projets"
+  audit:          "les travaux d'audit et de contrôle financier"
+  conformité:     "les travaux de contrôle interne et de conformité"
+  conseil:        "les missions de conseil financier"
+  consulting:     "les missions de conseil financier"
+  default:        "l'analyse financière et à l'investissement"
+
+# Réponses par défaut à des questions fréquentes des formulaires (optionnel).
+answers:
+  availability: "À partir de mars 2027, pour 6 mois"
+  work_authorization: "Oui"
+  notice_period: "Disponible immédiatement"
+  gender: ""                      # Homme / Femme / Autre (demandé par JobTeaser)
+
+# Recherche automatique d'offres JobTeaser (python -m src.search).
+# Le robot ne garde que les offres « Candidature simplifiée ».
+search:
+  keywords:
+    - "private debt"
+    - "credit"
+    - "markets"
+    - "asset management"
+    - "private equity"
+    - "M&A"
+    - "corporate finance"
+    - "quantitative"
+    - "risk"
+  contract_contains: ["stage"]     # texte du type de contrat (ex. "Stage 6 mois")
+  location_contains: ["france"]    # texte du lieu ; [] = partout
+  start_from: "2027-03-01"         # garde les offres qui débutent à partir de cette date ; "" = toutes
+  max_pages: 3                     # pages de résultats lues par mot-clé
+  include_external: false          # true = garde aussi les offres ↗ (à finir à la main)
+  exclude_urls: []                 # offres écartées : jamais rajoutées par la recherche
+# Comportement d'exécution (surchargé par les options en ligne de commande).
+settings:
+  dry_run: false              # true = remplit sans soumettre (recommandé au 1er essai : --dry-run)
+  confirm_before_submit: false  # false = envoie sans demander (choix de l'utilisateur)
+  min_delay_seconds: 2        # rythme poli entre actions
+  max_delay_seconds: 5
+  headless: false             # false = tu vois le navigateur agir (recommandé)
+  skip_already_applied: true  # ne repostule pas à une URL déjà dans le journal
+
+  # Navigateur utilisé par l'outil.
+  browser:
+    # "system_chrome" = TON Chrome + TON profil (sessions + gestionnaire Chrome).
+    #                   >>> FERME Google Chrome avant de lancer l'outil. <<<
+    # "persistent"    = Chromium isolé dédié (tu te connectes dedans une fois).
+    # "cdp"           = se connecte à un Chrome lancé avec --remote-debugging-port.
+    mode: "persistent"
+
+    # macOS (déjà pré-rempli pour toi). Garde les guillemets, l'espace est normal.
+    chrome_user_data_dir: "~/Library/Application Support/Google/Chrome"
+    chrome_profile_directory: "Default"   # ou "Profile 1", "Profile 2"... selon ton profil
+
+    # Utilisé seulement si mode: "cdp"
+    cdp_url: "http://localhost:9222"
