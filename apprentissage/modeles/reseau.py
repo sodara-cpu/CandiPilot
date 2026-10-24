@@ -159,8 +159,9 @@ class Navigateur:
     en k clics de plus, 0 sinon. Le réseau est réentraîné régulièrement sur cette mémoire.
     """
 
-    def __init__(self, gamma: float = 0.6, lr: float = 1e-2):
-        self.net, self.gamma = ReseauLiens(), gamma
+    def __init__(self, gamma: float = 0.6, lr: float = 1e-2, seed: int = 0):
+        torch.manual_seed(seed)
+        self.net, self.gamma, self.rng = ReseauLiens(), gamma, random.Random(seed)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=lr)
         self.memory = {}          # url -> [tokens, profondeur, cible]
 
@@ -191,7 +192,7 @@ class Navigateur:
         self.net.train()
         loss_fn, loss = nn.BCEWithLogitsLoss(), torch.tensor(0.0)
         for _ in range(steps):
-            batch = random.sample(items, min(64, len(items)))
+            batch = self.rng.sample(items, min(64, len(items)))
             bag = _bag([b[0] for b in batch])
             depth = torch.tensor([[b[1] / 5] for b in batch], dtype=torch.float)
             loss = loss_fn(self.net(bag, depth), torch.tensor([b[2] for b in batch]))

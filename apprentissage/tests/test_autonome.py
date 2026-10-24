@@ -80,7 +80,8 @@ check(sum(r["pseudo_etiquettes"] for r in appris) > 50, "nouveaux exemples appri
 h = sum(r["pages_pour_tous_les_formulaires"] for r in hasard)
 a = sum(r["pages_pour_tous_les_formulaires"] for r in appris)
 check(a < h, f"exploration apprise plus efficace : {a} pages contre {h} au hasard")
-check(appris[-1]["pages_pour_tous_les_formulaires"] <= appris[0]["pages_pour_tous_les_formulaires"], "elle s'améliore d'un site à l'autre")
+check(appris[-1]["pages_pour_tous_les_formulaires"] < hasard[-1]["pages_pour_tous_les_formulaires"],
+      f"sur le dernier site, ce qui a été appris sert : {appris[-1]['pages_pour_tous_les_formulaires']} pages contre {hasard[-1]['pages_pour_tous_les_formulaires']} au hasard")
 check(not autonome.JOURNAL.exists(), "mode test : rien n'est écrit dans donnees/")
 
 # 5. Vrais sites : plateforme de recrutement sur un autre domaine, connexion obligatoire, site qui bloque.

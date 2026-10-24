@@ -9,11 +9,210 @@ navigateur_visible: false  # true si le site bloque les navigateurs invisibles
 # Un lien n'est suivi que si son adresse ou son texte contient un de ces mots.
 mots_cles_liens: [career, carriere, carrière, job, emploi, offre, offer, apply, postuler, candidat, stage, intern]
 
-sites: 
-# Exemple :
-#   - nom: Exemple Greenhouse
-#     url: https://boards.greenhouse.io/<entreprise>
-   - nom: SOCIETE GENERALE
-     url: https://careers.societegenerale.com/
-   - nom: BNP PARIBAS
-     url: https://group.bnpparibas/emploi-carriere
+sites:
+  # Plateformes de recrutement (portails d'offres hébergés par Workday et Taleo)
+  - nom: "Workday (NVIDIA)"
+    url: https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
+  - nom: "Taleo (Société Générale)"
+    url: https://socgen.taleo.net/careersection/sgcareers/jobsearch.ftl?lang=fr-FR
+  # Entreprises
+  - nom: "Airbus"
+    url: https://www.airbus.com/en/careers
+  - nom: "Safran"
+    url: https://www.safran-group.com/jobs
+  - nom: "Thales"
+    url: https://careers.thalesgroup.com/global/en
+  - nom: "Dassault Systèmes"
+    url: https://www.3ds.com/careers
+  - nom: "Orange"
+    url: https://orange.jobs/
+  - nom: "Capgemini"
+    url: https://www.capgemini.com/careers/
+  - nom: "Sopra Steria"
+    url: https://careers.soprasteria.com/
+  - nom: "Atos"
+    url: https://jobs.atos.net/
+  - nom: "Accenture"
+    url: https://www.accenture.com/us-en/careers
+  - nom: "Deloitte"
+    url: https://www.deloitte.com/global/en/careers.html
+  - nom: "PwC"
+    url: https://www.pwc.com/gx/en/careers.html
+  - nom: "EY"
+    url: https://careers.ey.com/
+  - nom: "KPMG"
+    url: https://kpmg.com/xx/en/home/careers.html
+  - nom: "BNP Paribas"
+    url: https://group.bnpparibas/en/careers
+  - nom: "Société Générale"
+    url: https://careers.societegenerale.com/
+  - nom: "Crédit Agricole"
+    url: https://groupecreditagricole.jobs/en/
+  - nom: "Groupe BPCE"
+    url: https://recrutement.bpce.fr/
+  - nom: "AXA"
+    url: https://careers.axa.com/
+  - nom: "Allianz"
+    url: https://careers.allianz.com/
+  - nom: "Covéa"
+    url: https://recrutement.covea.fr/
+  - nom: "L’Oréal"
+    url: https://careers.loreal.com/
+  - nom: "LVMH"
+    url: https://www.lvmh.com/en/join-us/our-job-offers
+  - nom: "Kering"
+    url: https://www.kering.com/en/talent/
+  - nom: "Hermès"
+    url: https://talents.hermes.com/
+  - nom: "Chanel"
+    url: https://www.chanel.com/us/careers/
+  - nom: "Danone"
+    url: https://careers.danone.com/
+  - nom: "Nestlé"
+    url: https://www.nestle.com/jobs
+  - nom: "Unilever"
+    url: https://careers.unilever.com/
+  - nom: "PepsiCo"
+    url: https://www.pepsicojobs.com/
+  - nom: "Coca-Cola"
+    url: https://careers.coca-colacompany.com/
+  - nom: "Carrefour"
+    url: https://recrute.carrefour.fr/
+  - nom: "Auchan"
+    url: https://auchan-recrute.fr/
+  - nom: "Decathlon"
+    url: https://joinus.decathlon.fr/
+  - nom: "Leroy Merlin"
+    url: https://recrute.leroymerlin.fr/
+  - nom: "IKEA"
+    url: https://jobs.ikea.com/
+  - nom: "Accor"
+    url: https://careers.accor.com/
+  - nom: "Marriott"
+    url: https://careers.marriott.com/
+  - nom: "Hilton"
+    url: https://jobs.hilton.com/
+  - nom: "SNCF"
+    url: https://emploi.sncf.com/
+  - nom: "RATP"
+    url: https://www.ratp.fr/recrutement
+  - nom: "Air France"
+    url: https://recrutement.airfrance.com/
+  - nom: "Schneider Electric"
+    url: https://www.se.com/ww/en/about-us/careers/overview.jsp
+  - nom: "Siemens"
+    url: https://jobs.siemens.com/
+  - nom: "Alstom"
+    url: https://jobsearch.alstom.com/
+  - nom: "Valeo"
+    url: https://www.valeo.com/en/our-job-offers/
+  - nom: "Michelin"
+    url: https://recrutement.michelin.fr/
+  - nom: "Renault Group"
+    url: https://www.renaultgroup.com/en/talent/
+  - nom: "Stellantis"
+    url: https://careers.stellantis.com/
+  - nom: "Sanofi"
+    url: https://jobs.sanofi.com/
+  - nom: "TotalEnergies"
+    url: https://careers.totalenergies.com/
+  - nom: "EDF"
+    url: https://www.edf.fr/edf-recrute
+  - nom: "ENGIE"
+    url: https://jobs.engie.com/
+  - nom: "Veolia"
+    url: https://jobs.veolia.com/
+  - nom: "SUEZ"
+    url: https://www.suez.com/en/join-us
+  - nom: "Bouygues"
+    url: https://carrieres.bouygues.com/
+  - nom: "VINCI"
+    url: https://jobs.vinci.com/
+  - nom: "Saint-Gobain"
+    url: https://joinus.saint-gobain.com/
+  - nom: "Google"
+    url: https://www.google.com/about/careers/applications/
+  - nom: "Microsoft"
+    url: https://careers.microsoft.com/
+  - nom: "Amazon"
+    url: https://www.amazon.jobs/
+  - nom: "Apple"
+    url: https://jobs.apple.com/
+  - nom: "Meta"
+    url: https://www.metacareers.com/
+  - nom: "Netflix"
+    url: https://jobs.netflix.com/
+  - nom: "Salesforce"
+    url: https://careers.salesforce.com/
+  - nom: "Oracle"
+    url: https://careers.oracle.com/
+  - nom: "IBM"
+    url: https://www.ibm.com/careers
+  - nom: "SAP"
+    url: https://jobs.sap.com/
+  - nom: "Adobe"
+    url: https://careers.adobe.com/
+  - nom: "NVIDIA"
+    url: https://www.nvidia.com/en-us/about-nvidia/careers/
+  - nom: "Intel"
+    url: https://jobs.intel.com/
+  - nom: "AMD"
+    url: https://careers.amd.com/
+  - nom: "Cisco"
+    url: https://jobs.cisco.com/
+  - nom: "Dell Technologies"
+    url: https://jobs.dell.com/
+  - nom: "HP"
+    url: https://jobs.hp.com/
+  - nom: "Hewlett Packard Enterprise"
+    url: https://careers.hpe.com/
+  - nom: "Spotify"
+    url: https://www.lifeatspotify.com/jobs
+  - nom: "Uber"
+    url: https://www.uber.com/global/en/careers/
+  - nom: "Airbnb"
+    url: https://careers.airbnb.com/
+  - nom: "Booking.com"
+    url: https://careers.booking.com/
+  - nom: "Expedia Group"
+    url: https://careers.expediagroup.com/
+  - nom: "PayPal"
+    url: https://careers.pypl.com/
+  - nom: "Mastercard"
+    url: https://careers.mastercard.com/
+  - nom: "Stripe"
+    url: https://stripe.com/jobs
+  - nom: "Adyen"
+    url: https://careers.adyen.com/
+  - nom: "Wise"
+    url: https://wise.jobs/
+  - nom: "Revolut"
+    url: https://www.revolut.com/careers/
+  - nom: "Datadog"
+    url: https://careers.datadoghq.com/
+  - nom: "Cloudflare"
+    url: https://www.cloudflare.com/careers/
+  - nom: "GitHub"
+    url: https://www.github.careers/careers-home
+  - nom: "GitLab"
+    url: https://about.gitlab.com/jobs/
+  - nom: "Atlassian"
+    url: https://www.atlassian.com/company/careers
+  - nom: "Shopify"
+    url: https://www.shopify.com/careers
+  - nom: "Canva"
+    url: https://www.lifeatcanva.com/en/
+  - nom: "Figma"
+    url: https://www.figma.com/careers/
+  - nom: "Notion"
+    url: https://www.notion.com/careers
+  - nom: "OpenAI"
+    url: https://openai.com/careers/
+  - nom: "Anthropic"
+    url: https://www.anthropic.com/careers
+  - nom: "Mistral AI"
+    url: https://mistral.ai/careers
+  - nom: "Hugging Face"
+    url: https://apply.workable.com/huggingface/
+  - nom: "Doctolib"
+    url: https://careers.doctolib.com/
