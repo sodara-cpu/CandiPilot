@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 import sys
 import tempfile
 import time
@@ -37,12 +38,51 @@ from synthetique import build_site, labeled_pages
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "donnees"
 PSEUDO = DATA / "pseudo.jsonl"
-JOURNAL = DATA / "journal.jsonl"
+JOURNAL = DATA / "journal.jsonl"      # un bilan par site
+PAGES = DATA / "pages.jsonl"          # chaque page visitée, avec ce qui a été compris
 CORE = {"email", "cv", "first_name", "last_name", "full_name", "phone"}
+
+# Plateformes de recrutement vers lesquelles le bouton « Postuler » d'un site carrières renvoie souvent.
+ATS = ("taleo.net", "myworkdayjobs.com", "workday.com", "greenhouse.io", "lever.co", "smartrecruiters.com",
+       "successfactors.com", "successfactors.eu", "icims.com", "csod.com", "teamtailor.com", "recruitee.com",
+       "welcomekit.co", "jobteaser.com", "workable.com", "bamboohr.com", "jobvite.com", "oraclecloud.com")
+APPLY_WORDS = re.compile(r"postul|apply|candidat|jobapply|application", re.I)
+BLOCKED = re.compile(r"access denied|forbidden|just a moment|attention required|captcha|are you a robot|"
+                     r"accès refusé|request blocked|not authorized", re.I)
+SKIP = re.compile(r"^(mailto|tel|javascript):|facebook\.com|twitter\.com|x\.com/|linkedin\.com/(share|sharing)|"
+                  r"instagram\.com|youtube\.com|\.(pdf|jpg|png|zip)(\?|$)", re.I)
 
 
 def is_application_form(labels: list) -> bool:
     return "submit" in labels and len(CORE & set(labels)) >= 2
+
+
+def classify(title: str, html: str, champs: list, labels: list) -> str:
+    """formulaire | connexion | bloquee | page"""
+    if BLOCKED.search(title or "") or (len(html) < 2000 and BLOCKED.search(html)):
+        return "bloquee"
+    if is_application_form(labels):
+        return "formulaire"
+    if any(c["type"] == "password" for c in champs):
+        return "connexion"
+    return "page"
+
+
+def is_ats(domain: str) -> bool:
+    return any(domain == d or domain.endswith("." + d) for d in ATS)
+
+
+def follow(link: str, text: str, allowed: set) -> bool:
+    """Lien à suivre : même site, ou bouton « Postuler » / plateforme de recrutement (ajoutée aux sites permis)."""
+    if SKIP.search(link) or not link.startswith(("http", "file:")):
+        return False
+    domain = urlparse(link).netloc
+    if domain in allowed:
+        return True
+    if is_ats(domain) or APPLY_WORDS.search(text or "") or APPLY_WORDS.search(urlparse(link).path):
+        allowed.add(domain)
+        return True
+    return False
 
 
 def accuracy(model, pages: list) -> float:
@@ -54,10 +94,28 @@ def accuracy(model, pages: list) -> float:
     return ok / total if total else 0.0
 
 
+def diagnose(r: dict, kinds: dict, platforms: set, budget: int, more_links: bool) -> str:
+    """Phrase simple qui explique le résultat d'un site."""
+    if r["formulaires"]:
+        return f"{r['formulaires']} formulaire(s) de candidature lu(s) et appris."
+    if kinds["bloquee"] and r["pages_visitees"] <= 1:
+        return "Accès refusé : ce site bloque les robots. Retire-le de config.yaml."
+    if platforms:
+        return ("Le bouton « Postuler » mène à " + ", ".join(sorted(platforms)) +
+                ", qui demande de se connecter avant le formulaire : chemin appris, formulaire non lisible sans compte.")
+    if kinds["connexion"]:
+        return "Une page de connexion bloque l'accès aux formulaires."
+    if r["echecs"] and not r["pages_visitees"]:
+        return "Aucune page n'a pu être ouverte (adresse incorrecte ou site injoignable)."
+    if more_links and r["pages_visitees"] >= budget:
+        return f"Limite de {budget} pages atteinte avant de trouver un formulaire : augmente pages_max_par_site."
+    return "Aucun lien vers un formulaire de candidature trouvé depuis cette page de départ."
+
+
 class Apprenant:
     def __init__(self, seuil: float = 0.95, epsilon: float = 0.15, seed: int = 0, fresh: bool = False,
-                 n_synth: int = 300, boot_epochs: int = 20):
-        self.seuil, self.epsilon, self.rng = seuil, epsilon, random.Random(seed)
+                 n_synth: int = 300, boot_epochs: int = 20, persist: bool = True):
+        self.seuil, self.epsilon, self.rng, self.persist = seuil, epsilon, random.Random(seed), persist
         self.human = load_pages(DATA)
         self.synthetic = labeled_pages(n_synth, seed=seed + 1)
         self.validation = self.human + labeled_pages(80, seed=seed + 99)
@@ -81,9 +139,10 @@ class Apprenant:
 
     # ---------- exploration d'un site ----------
     def explore(self, name: str, start: str, fetch, budget: int, delay: float = 0.0, allowed=lambda u: True) -> dict:
-        domain = urlparse(start).netloc
+        allowed_domains = {urlparse(start).netloc}
         frontier = [(start, "", "", 0, None)]           # (url, href, texte du lien, profondeur, parent)
         parents, seen, visited, forms, first_form, last_form, new_pseudo = {}, set(), 0, [], None, None, 0
+        kinds, failures, platforms = {"formulaire": 0, "connexion": 0, "bloquee": 0, "page": 0}, 0, set()
         while frontier and visited < budget:
             if self.rng.random() < self.epsilon:
                 item = frontier.pop(self.rng.randrange(len(frontier)))
@@ -96,6 +155,8 @@ class Apprenant:
             seen.add(url)
             page = fetch(url)
             if page is None:
+                failures += 1
+                self._page_log({"site": name, "url": url, "type": "echec", "profondeur": depth, "lien": text[:80]})
                 continue
             html, title, links = page
             visited += 1
@@ -105,7 +166,24 @@ class Apprenant:
             champs = extract_fields(html)
             probs = self.fields.probabilites(champs)
             labels = [l for l, _ in probs]
-            if is_application_form(labels):
+            kind = classify(title, html, champs, labels)
+            kinds[kind] += 1
+            self._page_log({"site": name, "url": url, "titre": (title or "")[:100], "type": kind, "profondeur": depth,
+                            "lien": text[:80], "champs": len(champs), "liens": len(links),
+                            "roles": sorted({l for l in labels if l != "other"})})
+            if kind == "bloquee":
+                if visited == 1:
+                    break                                   # le site refuse les robots : on n'insiste pas
+                continue
+            if kind == "connexion" and is_ats(urlparse(url).netloc):
+                # Porte de la candidature atteinte (connexion obligatoire) : bon chemin, mais rien à lire derrière.
+                platforms.add(urlparse(url).netloc)
+                chain, u = [], url
+                while u is not None:
+                    chain.append(u)
+                    u = parents.get(u)
+                self.links.reward(chain)
+            elif kind == "formulaire":
                 forms.append(url)
                 first_form, last_form = first_form or visited, visited
                 chain, u = [], url
@@ -114,18 +192,29 @@ class Apprenant:
                     u = parents.get(u)
                 self.links.reward(chain)
                 new_pseudo += self._remember(name, url, title, champs, probs)
-            else:
+            elif kind != "connexion":
                 for h, t in links:
                     link = urldefrag(urljoin(url, h))[0]
-                    if urlparse(link).netloc == domain and link not in seen:
+                    if link not in seen and follow(link, t, allowed_domains):
                         frontier.append((link, h, t, depth + 1, url))
             if visited % 4 == 0:
                 self.links.learn()
             time.sleep(delay)
         self.links.learn(60)
-        return {"site": name, "pages_visitees": visited, "formulaires": len(forms),
-                "pages_avant_premier_formulaire": first_form, "pages_pour_tous_les_formulaires": last_form,
-                "pseudo_etiquettes": new_pseudo}
+        result = {"site": name, "pages_visitees": visited, "formulaires": len(forms),
+                  "pages_avant_premier_formulaire": first_form, "pages_pour_tous_les_formulaires": last_form,
+                  "pseudo_etiquettes": new_pseudo, "connexions_requises": kinds["connexion"],
+                  "pages_bloquees": kinds["bloquee"], "echecs": failures}
+        result["diagnostic"] = diagnose(result, kinds, platforms, budget, bool(frontier))
+        return result
+
+    def _page_log(self, entry: dict) -> None:
+        print(f"   [{entry['type']}] {entry['url'][:110]}")
+        if self.persist:
+            DATA.mkdir(exist_ok=True)
+            entry["date"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with PAGES.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def _remember(self, site: str, url: str, title: str, champs: list, probs: list) -> int:
         """Garde les champs dont le réseau est sûr ; les autres restent sans étiquette (ignorés à l'entraînement)."""
@@ -157,7 +246,8 @@ class Apprenant:
 
     def log(self, entry: dict, persist: bool = True) -> None:
         entry["date"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        print("   " + ", ".join(f"{k} = {v}" for k, v in entry.items() if k != "date"))
+        print("   Bilan : " + ", ".join(f"{k} = {v}" for k, v in entry.items() if k not in ("date", "diagnostic")))
+        print("   → " + entry.get("diagnostic", ""))
         if persist:
             DATA.mkdir(exist_ok=True)
             with JOURNAL.open("a", encoding="utf-8") as f:
@@ -192,7 +282,8 @@ class Browser:
 
 def run(sites: list, budget: int, delay: float, visible: bool, persist: bool = True, fresh: bool = False, seed: int = 0,
         epsilon: float = 0.15, **options) -> list:
-    learner, browser, results = Apprenant(fresh=fresh, seed=seed, epsilon=epsilon, **options), Browser(visible), []
+    learner = Apprenant(fresh=fresh, seed=seed, epsilon=epsilon, persist=persist, **options)
+    browser, results = Browser(visible), []
     try:
         for site in sites:
             print(f"== {site['nom']}")

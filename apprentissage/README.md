@@ -79,16 +79,27 @@ cd ~/Downloads/job-rpa/apprentissage
 ```
 
 - Premier lancement : apprentissage de départ (~30 s), puis exploration site par site.
-- Pour chaque site : pages visitées, puis un bilan (formulaires trouvés, nouveaux exemples appris,
-  précision, modèle gardé ou refusé).
+- Pour chaque page : son type entre crochets — `[page]`, `[formulaire]` (formulaire de candidature lu),
+  `[connexion]` (compte demandé), `[bloquee]` (le site refuse les robots), `[echec]` (page injoignable).
+- Pour chaque site : un bilan, puis une phrase `→` qui explique le résultat et quoi faire.
+- Le bouton « Postuler » est suivi même s'il mène vers une plateforme de recrutement (Taleo, Workday,
+  Greenhouse, Lever, SmartRecruiters…). Si elle exige un compte, le chemin est appris mais le formulaire
+  ne peut pas être lu.
 - 5 s d'attente entre deux pages : environ 2 minutes pour 20 pages par site.
 - `Ctrl + C` pour arrêter ; ce qui est appris est enregistré après chaque site terminé.
 
-**4. Si un site affiche « échec » sur toutes ses pages** (navigateur invisible bloqué), mettre
-`navigateur_visible: true` dans `config.yaml` : une fenêtre Chrome s'ouvre et montre la navigation.
+**4. Selon le diagnostic :**
+- « Accès refusé : ce site bloque les robots » → retirer le site de `config.yaml` (on ne contourne pas un refus).
+- Pages en `[echec]` sur un site qui s'affiche normalement dans ton navigateur → essayer
+  `navigateur_visible: true` (une fenêtre Chrome s'ouvre et montre la navigation).
+- « Limite de N pages atteinte » → augmenter `pages_max_par_site`.
 
-**5. Suivre les progrès** : un bilan par site dans `donnees/journal.jsonl`. Chaque lancement repart
-de ce qui a déjà été appris (`modeles/sauvegardes/`, `donnees/pseudo.jsonl`).
+**5. Suivre les progrès** (dossier `donnees/`) :
+- `journal.jsonl` : un bilan par site, avec le diagnostic ;
+- `pages.jsonl` : chaque page visitée (type, lien suivi, nombre de champs, rôles reconnus) ;
+- `pseudo.jsonl` : les formulaires appris seul.
+
+Chaque lancement repart de ce qui a déjà été appris (`modeles/sauvegardes/`, `pseudo.jsonl`).
 
 Réglages de `config.yaml` : `delai_secondes` (pause entre deux pages), `pages_max_par_site`,
 `profondeur_max` (clics depuis la page de départ), `mots_cles_liens` (pour `collecte.py`).
@@ -117,7 +128,7 @@ l'entraînement et servent de juge pour accepter ou refuser un nouveau modèle.
 
 ```bash
 .venv/bin/python apprentissage/tests/test_apprentissage.py   # extraction, règles, isolation (24)
-.venv/bin/python apprentissage/tests/test_autonome.py        # réseaux et exploration autonome (13)
+.venv/bin/python apprentissage/tests/test_autonome.py        # réseaux, exploration, vrais cas de sites (24)
 ```
 
 ## Intégration future dans CandiPilot (quand ce sera décidé)

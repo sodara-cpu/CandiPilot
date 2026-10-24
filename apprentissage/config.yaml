@@ -9,7 +9,11 @@ navigateur_visible: false  # true si le site bloque les navigateurs invisibles
 # Un lien n'est suivi que si son adresse ou son texte contient un de ces mots.
 mots_cles_liens: [career, carriere, carrière, job, emploi, offre, offer, apply, postuler, candidat, stage, intern]
 
-sites: []
+sites: 
 # Exemple :
 #   - nom: Exemple Greenhouse
 #     url: https://boards.greenhouse.io/<entreprise>
+   - nom: SOCIETE GENERALE
+     url: https://careers.societegenerale.com/
+   - nom: BNP PARIBAS
+     url: https://group.bnpparibas/emploi-carriere

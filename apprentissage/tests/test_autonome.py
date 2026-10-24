@@ -83,4 +83,41 @@ check(a < h, f"exploration apprise plus efficace : {a} pages contre {h} au hasar
 check(appris[-1]["pages_pour_tous_les_formulaires"] <= appris[0]["pages_pour_tous_les_formulaires"], "elle s'améliore d'un site à l'autre")
 check(not autonome.JOURNAL.exists(), "mode test : rien n'est écrit dans donnees/")
 
+# 5. Vrais sites : plateforme de recrutement sur un autre domaine, connexion obligatoire, site qui bloque.
+from autonome import classify, follow  # noqa: E402
+allowed = {"careers.banque.fr"}
+check(follow("https://careers.banque.fr/offre/1", "Analyste", allowed), "lien du même site suivi")
+check(follow("https://banque.taleo.net/careersection/jobapply.ftl?job=1", "", allowed) and "banque.taleo.net" in allowed,
+      "lien vers une plateforme de recrutement (Taleo) suivi")
+check(follow("https://apply.autre.com/form", "Postuler", allowed), "bouton « Postuler » vers un autre site suivi")
+check(not follow("https://www.presse.fr/article", "Actualités", allowed), "lien externe sans rapport ignoré")
+check(not follow("https://twitter.com/share?text=Postulez", "", allowed) and not follow("mailto:?subject=Postulez", "", allowed),
+      "partage (réseaux sociaux, e-mail) ignoré")
+check(classify("Access Denied", "<html>Access Denied</html>", [], []) == "bloquee", "page « Access Denied » reconnue comme bloquée")
+login = [{"type": "text"}, {"type": "password"}]
+check(classify("Login", "<html>" + "x" * 3000, login, ["email", "other", "submit"]) == "connexion", "page de connexion reconnue")
+
+FORM = labeled_pages(1, seed=5)[0]
+form_html = "<form>" + "".join(f'<label>{f["label"] or f["placeholder"]}<input type="{f["type"] or "text"}" name="{f["name"]}"></label>' for f in FORM["champs"][:-1]) + "<button>Postuler</button></form>"
+WEB = {  # url -> (html, titre, liens)
+    "https://careers.banque.fr/": ("<a>x</a>" * 50, "Carrières", [("https://careers.banque.fr/offre/1", "Stage analyste"), ("https://careers.banque.fr/legal", "Mentions légales")]),
+    "https://careers.banque.fr/legal": ("<p>legal</p>" * 300, "Mentions", []),
+    "https://careers.banque.fr/offre/1": ("<p>offre</p>" * 300, "Offre", [("https://banque.taleo.net/jobapply.ftl?job=1", "Postuler"), ("https://twitter.com/share", "")]),
+    "https://banque.taleo.net/jobapply.ftl?job=1": ("<p>x</p>" * 300 + '<form><input name="u"><input type="password" name="p"><button>Login</button></form>', "Login", []),
+    "https://bloque.fr/": ("<html>Access Denied</html>", "Access Denied", []),
+    "https://ouvert.fr/": ("<p>x</p>" * 300, "Carrières", [("https://ouvert.fr/apply", "Postuler")]),
+    "https://ouvert.fr/apply": ("<p>x</p>" * 300 + form_html, "Candidature", []),
+}
+fetch = lambda u: WEB.get(u)
+l2 = Apprenant(fresh=True, n_synth=120, boot_epochs=8, persist=False)
+r = l2.explore("Banque", "https://careers.banque.fr/", fetch, budget=10)
+check(r["connexions_requises"] == 1 and "banque.taleo.net" in r["diagnostic"] and "connecter" in r["diagnostic"],
+      "diagnostic : « Postuler » mène à une plateforme qui demande un compte")
+r = l2.explore("Bloqué", "https://bloque.fr/", fetch, budget=10)
+check(r["pages_bloquees"] == 1 and r["pages_visitees"] == 1 and "bloque les robots" in r["diagnostic"], "site qui bloque les robots : arrêt immédiat et conseil")
+r = l2.explore("Ouvert", "https://ouvert.fr/", fetch, budget=10)
+check(r["formulaires"] == 1 and "appris" in r["diagnostic"], "formulaire ouvert lu et appris")
+r = l2.explore("Introuvable", "https://nulle-part.fr/", fetch, budget=10)
+check("Aucune page n'a pu être ouverte" in r["diagnostic"], "site injoignable expliqué")
+
 print(f"\n{passed} vérifications réussies.")
