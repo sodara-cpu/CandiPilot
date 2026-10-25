@@ -161,7 +161,7 @@ l'extension non empaquetée ». Elle se relie seule au compte, vérifie les site
 LinkedIn, Welcome to the Jungle), exécute les recherches et candidatures JobTeaser, et remplit n'importe
 quel formulaire ouvert (bouton « Remplir ce formulaire », sans jamais l'envoyer).
 
-Hébergement : Render (`render.yaml`, `Dockerfile`, PostgreSQL). Détails : [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+En ligne : **https://candipilot.onrender.com** — Render (`render.yaml`, `Dockerfile`) + base PostgreSQL Neon. Détails : [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
 ### E-mails (mot de passe oublié)
 

@@ -57,6 +57,8 @@ liaison `link.js`, fenêtre `popup.*`) ; côté serveur `app/agent.py`.
 | Base | PostgreSQL Neon | SQLite `data-recette/` | SQLite `data/` |
 | Robot | extension des utilisateurs | simulé | extension, ou `CANDIPILOT_ROBOT=local` |
 
+**Production : https://candipilot.onrender.com** (Render, région Francfort ; base Neon).
+
 ## Mettre en ligne (une fois)
 
 1. **Neon** (neon.tech) : dans le projet, bouton **Connect** → copier l'adresse de connexion
