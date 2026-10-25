@@ -13,6 +13,20 @@ from . import db, files
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
 
 
+ORDER = {"manual": 0, "assisted": 1, "auto": 2}
+
+
+def capped_mode(c, a: dict) -> str:
+    """Mode effectif : celui choisi, plafonné par le registre des sites (sites inconnus : remplissage seulement)."""
+    from .migrations import policy_for
+    if a.get("apply_type") != "jobteaser":
+        return "manual"
+    pol = policy_for(c, a["url"])
+    test_portal = os.environ.get("CANDIPILOT_TEST_PORTAL") == "1" and "127.0.0.1" in a["url"]   # faux portail des tests
+    cap = pol["mode_max"] if pol else ("auto" if FAKE or test_portal else "manual")
+    return a["mode"] if ORDER.get(a["mode"], 0) <= ORDER[cap] else cap
+
+
 def jobteaser_missing(pr: dict) -> str:
     if FAKE or pr["jobteaser_status"] == "connected":
         return ""

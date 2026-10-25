@@ -59,6 +59,7 @@ jobs:
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:8765/healthz && break; sleep 1; done
           python tests/test_api.py http://127.0.0.1:8765
           python tests/test_workflow.py http://127.0.0.1:8765 server.log
+          python tests/test_foundations.py http://127.0.0.1:8765
 
   docker:
     # Image de production (Render) : construction puis essai d'une lettre PDF dans le conteneur.

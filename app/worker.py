@@ -37,6 +37,11 @@ _stop = threading.Event()
 _threads: list = []
 
 
+def log_event(event: str, **fields) -> None:
+    """Journal structuré (une ligne JSON par événement : lisible dans les journaux de Render)."""
+    print(json.dumps({"ts": db.now(), "event": event, **fields}, ensure_ascii=False, default=str), flush=True)
+
+
 # ---------- file de tâches ----------
 
 def enqueue(conn, user_id: str, kind: str, application_id: str = "") -> str:

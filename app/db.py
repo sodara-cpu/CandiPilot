@@ -274,6 +274,8 @@ def init() -> None:
             for col, decl in cols.items():
                 if col not in have:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        from . import migrations
+        migrations.apply(c)                       # migrations versionnées (app/migrations.py)
         # Un worker arrêté en pleine tâche : on la remet en file au démarrage.
         c.execute("UPDATE jobs SET statut='en_attente' WHERE statut='en_cours'")
 

@@ -181,7 +181,7 @@ u.req("POST", "/api/offers", {"url": "https://example.invalid/q", "poste": "Anal
 q_id = next(o["application_id"] for o in u.req("GET", "/api/offers")[1] if o["entreprise"] == "Acme SA")
 u.req("POST", f"/api/applications/{q_id}/select", {"selected": True})
 wait_until(lambda: statuses(u, [q_id]) == ["a_valider"])
-u.req("PUT", "/api/workflow", {"submit_mode": "auto", "want_prepare": True, "want_review": True})
+u.req("PUT", "/api/workflow", {"submit_mode": "auto", "auto_consent": True, "want_prepare": True, "want_review": True})
 g = guide(u)
 check(g["steps"][3]["done"] and [x["label"] for x in g["steps"][4]["subs"]] == ["Valide et démarre le robot"], "automatique : ni personnalisation ni relecture")
 L = u.req("GET", "/api/launch")[1]

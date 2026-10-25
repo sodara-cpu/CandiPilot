@@ -436,6 +436,7 @@ async function applicationView(id) {
             ${editable ? `<button class="btn btn-ghost" type="submit" style="align-self:flex-start">Enregistrer mes réponses</button>` : ""}</form>
         </section>` : ""}
         ${a.detail && !["echec", "incertaine"].includes(a.statut) ? `<p class="hint" style="margin:0">Robot : ${esc(a.detail)}</p>` : ""}
+        <details class="adv" id="hist"><summary>Historique de cette candidature</summary><div id="histBody" class="hint" style="margin-top:8px">Chargement…</div></details>
       </div>
       <aside class="card pad stack" style="position:sticky;top:20px">
         <h2>Ta décision</h2>
@@ -466,6 +467,12 @@ async function applicationView(id) {
   });
   const on = (sel, fn) => document.getElementById(sel)?.addEventListener("click", fn);
   const put = (body, msg) => act(() => api(`/api/applications/${id}`, { method: "PUT", body }), msg).then(route);
+  document.getElementById("hist").addEventListener("toggle", async (e) => {
+    if (!e.target.open) return;
+    const h = await api(`/api/applications/${id}/history`).catch(() => []);
+    document.getElementById("histBody").innerHTML = h.length ? `<ol class="timeline">${h.map((x) => `<li><span class="sub">${new Date(x.created_at).toLocaleString("fr-FR")}</span>
+      ${x.action === "statut" ? `${statusBadge(x.from_status)} → ${statusBadge(x.to_status)}` : `<b>${esc(x.action)}</b>`} ${x.detail ? `<span class="sub">— ${esc(x.detail)}</span>` : ""}</li>`).join("")}</ol>` : "Aucun événement pour l'instant.";
+  });
   on("doSelect", () => selectOffer(id, true));
   on("doUnselect", () => selectOffer(id, false));
   on("doCustomized", () => put({ customized: true }, "Dossier vérifié."));
@@ -900,7 +907,9 @@ async function modeView() {
         <div class="modes" role="radiogroup" aria-label="Mode de soumission">
           ${wf.modes.map((m) => `<button type="button" class="mode" data-m="${m.key}" aria-pressed="${mode === m.key}"><b>${mode === m.key ? "● " : ""}${esc(m.label)}</b><span>${esc(m.help)}</span></button>`).join("")}
         </div>
-        ${mode === "auto" ? `<div class="banner">Le robot envoie lui-même chaque candidature après ta validation finale. Les dossiers avec une question du recruteur sans réponse ne partent pas.</div>` : ""}
+        ${mode === "auto" ? `<div class="banner">Le robot envoie lui-même chaque candidature après ta validation finale. Les dossiers avec une question du recruteur sans réponse ne partent pas. Les sites qui n'autorisent pas l'envoi automatique passent en mode assisté.</div>
+          <label class="check consent"><input type="checkbox" id="consent" ${wf.auto_consent ? "checked" : ""}>
+            <span>J'autorise CandiPilot à envoyer des candidatures <b>en mon nom</b>, uniquement pour les offres que je sélectionne et après ma validation finale (« Valider et démarrer le robot »). Je peux retirer cette autorisation à tout moment. Au plus ${wf.daily_limit} envois par jour.</span></label>` : ""}
         ${mode === "assisted" || mode === "manual" ? `
           ${yn("prep", prep, "Souhaites-tu préparer ou personnaliser ta candidature ?", "je vérifie chaque dossier (lettre, CV, réponses) avant l'envoi", "CandiPilot utilise directement mes documents et informations")}
           ${yn("rev", rev, "Souhaites-tu relire ta candidature avant l'envoi ?", "je relis chaque candidature et j'autorise son envoi", "je passe directement au récapitulatif final")}` : ""}
@@ -908,13 +917,15 @@ async function modeView() {
           ${wf.submit_mode ? `<a class="btn btn-ghost" href="#/envoi">Aller à l'étape 5 →</a>` : ""}</div>
       </form>`);
     $app.querySelectorAll("[data-m]").forEach((b) => b.onclick = () => { mode = b.dataset.m; draw(); });
+    const consent = document.getElementById("consent"), submitBtn = $app.querySelector("#mf button[type=submit]");
+    if (consent) { const sync = () => { submitBtn.disabled = !consent.checked; }; consent.onchange = sync; sync(); }
     $app.querySelectorAll("input[name=prep]").forEach((r) => r.onchange = () => { prep = +r.value; });
     $app.querySelectorAll("input[name=rev]").forEach((r) => r.onchange = () => { rev = +r.value; });
     document.getElementById("mf").onsubmit = async (e) => {
       e.preventDefault();
       const optional = mode !== "auto";
       if (optional && (prep === -1 || rev === -1)) return toast("Réponds aux deux questions (Oui ou Non).", true);
-      const body = { submit_mode: mode, ...(optional ? { want_prepare: prep === 1, want_review: rev === 1 } : {}) };
+      const body = { submit_mode: mode, ...(optional ? { want_prepare: prep === 1, want_review: rev === 1 } : { auto_consent: true }) };
       await act(() => api("/api/workflow", { method: "PUT", body }), "Mode enregistré. Aucun envoi n'a été déclenché.");
       route();
     };

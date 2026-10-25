@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import agent, auth, db, files, matching, robot, worker, workflow
+from . import agent, auth, db, files, matching, migrations, robot, worker, workflow
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 5 * 1024 * 1024
@@ -29,6 +29,20 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 app.include_router(agent.router)
 
 CurrentUser = Depends(auth.current_user)
+
+
+@app.middleware("http")
+async def same_origin_writes(request: Request, call_next):
+    """Anti-CSRF : une modification (POST, PUT, PATCH, DELETE) doit venir de CandiPilot lui-même.
+    L'extension s'authentifie par jeton (pas de cookie) : ses routes /api/agent/* ne sont pas concernées."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path.startswith("/api/") \
+            and not request.url.path.startswith("/api/agent/") or request.url.path == "/api/agent/link":
+        origin = request.headers.get("origin") or ""
+        if origin and request.method != "GET":
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+            if origin.split("://", 1)[-1].rstrip("/") != host:
+                return JSONResponse({"detail": "Requête refusée : elle ne vient pas de CandiPilot."}, status_code=403)
+    return await call_next(request)
 
 
 @app.on_event("startup")
@@ -122,8 +136,9 @@ def register(body: RegisterIn, request: Request, response: Response):
     with db.tx() as c:
         if c.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
             raise HTTPException(409, "Un compte existe déjà avec cette adresse.")
+        # Heure à la microseconde : le premier compte (propriétaire) est désigné sans égalité possible.
         c.execute("INSERT INTO users(id,email,password_hash,created_at) VALUES (?,?,?,?)",
-                  (uid, email, auth.hash_password(body.password), db.now()))
+                  (uid, email, auth.hash_password(body.password), datetime.now(timezone.utc).isoformat()))
         c.execute("INSERT INTO profiles(user_id, first_name, last_name, letter_template) VALUES (?,?,?,?)",
                   (uid, body.first_name.strip(), body.last_name.strip(), robot.default_letter_template()))
         # Première recherche automatique après le délai choisi, pas dès l'inscription.
@@ -917,6 +932,13 @@ class WorkflowIn(BaseModel):
     want_prepare: Optional[bool] = None
     want_review: Optional[bool] = None
     letter_source: Optional[str] = None     # document | template
+    auto_consent: Optional[bool] = None     # consentement explicite à l'envoi automatique en son nom
+    daily_limit: Optional[int] = Field(None, ge=1, le=100)
+
+
+def audit(c, uid: str, action: str, detail: str = "", application_id: str = "", actor: str = "utilisateur") -> None:
+    c.execute("""INSERT INTO audit_log(user_id, application_id, actor, action, detail, created_at)
+                 VALUES (?,?,?,?,?,?)""", (uid, application_id, actor, action, detail[:500], db.now()))
 
 
 @app.get("/api/workflow")
@@ -925,6 +947,7 @@ def get_workflow(user=CurrentUser):
         pr = workflow.prefs(c, user["id"])
     return {"submit_mode": pr["default_mode"] if pr["mode_chosen"] else "", "want_prepare": pr["want_prepare"],
             "want_review": pr["want_review"], "letter_source": pr["letter_source"],
+            "auto_consent": bool(pr.get("auto_submit_consent_at")), "daily_limit": pr.get("daily_limit") or 20,
             "modes": [{"key": k, "label": l, "help": h} for k, (l, h) in workflow.MODES.items()]}
 
 
@@ -936,6 +959,13 @@ def put_workflow(body: WorkflowIn, user=CurrentUser):
         if body.submit_mode is not None:
             if body.submit_mode not in workflow.MODES:
                 raise HTTPException(422, "Mode : auto, assisted ou manual.")
+            pr = workflow.prefs(c, uid)
+            if body.submit_mode == "auto" and not (body.auto_consent or pr.get("auto_submit_consent_at")):
+                raise HTTPException(422, "L'envoi automatique demande ton autorisation explicite (case à cocher).")
+            if body.auto_consent:
+                c.execute("UPDATE preferences SET auto_submit_consent_at=? WHERE user_id=?", (db.now(), uid))
+                audit(c, uid, "consentement", "Autorise l'envoi automatique de candidatures en son nom.")
+            audit(c, uid, "mode", f"Mode de soumission : {body.submit_mode}")
             c.execute("UPDATE preferences SET default_mode=?, mode_chosen=1 WHERE user_id=?", (body.submit_mode, uid))
             # Dossiers pas encore lancés : nouveau mode (les offres externes restent en semi-assisté).
             c.execute("""UPDATE applications SET mode=?, reviewed=0, updated_at=? WHERE user_id=? AND launched=0
@@ -946,6 +976,11 @@ def put_workflow(body: WorkflowIn, user=CurrentUser):
             c.execute("UPDATE preferences SET want_prepare=? WHERE user_id=?", (int(body.want_prepare), uid))
         if body.want_review is not None:
             c.execute("UPDATE preferences SET want_review=? WHERE user_id=?", (int(body.want_review), uid))
+        if body.daily_limit is not None:
+            c.execute("UPDATE preferences SET daily_limit=? WHERE user_id=?", (body.daily_limit, uid))
+        if body.auto_consent is False:
+            c.execute("UPDATE preferences SET auto_submit_consent_at='' WHERE user_id=?", (uid,))
+            audit(c, uid, "consentement", "Retire l'autorisation d'envoi automatique.")
         if body.letter_source is not None:
             if body.letter_source not in ("document", "template"):
                 raise HTTPException(422, "Lettre : document ou template.")
@@ -997,24 +1032,82 @@ def launch(user=CurrentUser):
         if workflow.missing_documents(c, uid, pr):
             raise HTTPException(422, "Il manque : " + ", ".join(workflow.missing_documents(c, uid, pr)) + ".")
         mprof = workflow.missing_profile(c, uid)
-        started, manual, skipped = [], [], 0
+        today = datetime.now(timezone.utc).date().isoformat()
+        sent_today = c.execute("""SELECT COUNT(*) n FROM audit_log WHERE user_id=? AND action='statut' AND to_status='soumission'
+                                  AND created_at>=?""", (uid, today)).fetchone()["n"]
+        budget = max(0, int(pr.get("daily_limit") or 20) - sent_today)
+        started, manual, skipped, capped, over = [], [], 0, 0, 0
         for a in workflow.pending(c, uid):
             b, _ = workflow.blockers(c, a, uid, pr, mprof)
             if b:
                 skipped += 1
                 continue
+            # Registre des sites : jamais plus d'automatisation que ce que la plateforme permet.
+            mode = workflow.capped_mode(c, a)
+            if mode != a["mode"]:
+                capped += 1
+                c.execute("UPDATE applications SET mode=?, updated_at=? WHERE id=?", (mode, db.now(), a["id"]))
+                audit(c, uid, "mode_plafonné", f"{a['mode']} → {mode} (règle du site)", a["id"], "système")
+                a["mode"] = mode
+            if a["mode"] == "auto" and not pr.get("auto_submit_consent_at"):
+                raise HTTPException(422, "L'envoi automatique demande ton autorisation explicite (étape 4).")
+            if a["mode"] != "manual" and len(started) >= budget:
+                over += 1
+                continue
             if a["mode"] == "manual":
                 c.execute("UPDATE applications SET launched=1, updated_at=? WHERE id=?", (db.now(), a["id"]))
                 manual.append(a["id"])
                 continue
-            c.execute("UPDATE applications SET statut='soumission', launched=1, updated_at=? WHERE id=?", (db.now(), a["id"]))
+            c.execute("UPDATE applications SET statut='soumission', launched=1, idempotency_key=?, updated_at=? WHERE id=?",
+                      (db.new_id(), db.now(), a["id"]))
             worker.enqueue(c, uid, "submit", a["id"])
             started.append(a["id"])
         if not started and not manual:
-            raise HTTPException(409, "Aucun dossier prêt : résous les blocages indiqués dans le récapitulatif.")
+            raise HTTPException(409, "Aucun dossier prêt : résous les blocages indiqués dans le récapitulatif."
+                                     + (" Limite quotidienne d'envois atteinte." if over else ""))
+        audit(c, uid, "lancement", f"{len(started)} envoi(s), {len(manual)} à envoyer soi-même, {skipped} bloqué(s), {over} reporté(s)")
         db.add_event(c, uid, "info", f"Lancement validé : {len(started)} envoi(s) par le robot, "
-                                     f"{len(manual)} à envoyer toi-même, {skipped} dossier(s) bloqué(s) non envoyé(s).")
-    return {"started": len(started), "manual": len(manual), "skipped": skipped}
+                                     f"{len(manual)} à envoyer toi-même, {skipped} dossier(s) bloqué(s) non envoyé(s)"
+                                     + (f", {over} reporté(s) à demain (limite quotidienne)" if over else "") + ".")
+        worker.log_event("launch", user=uid, started=len(started), manual=len(manual), skipped=skipped, capped=capped, over=over)
+    return {"started": len(started), "manual": len(manual), "skipped": skipped, "capped": capped, "postponed": over}
+
+
+@app.get("/api/applications/{app_id}/history")
+def application_history(app_id: str, user=CurrentUser):
+    """Journal d'audit d'une candidature : chaque changement de statut et chaque décision."""
+    with db.tx() as c:
+        _app_or_404(c, app_id, user["id"])
+        return db.rows(c.execute("""SELECT actor, action, from_status, to_status, detail, created_at FROM audit_log
+                                    WHERE application_id=? AND user_id=? ORDER BY id""", (app_id, user["id"])))
+
+
+@app.get("/api/admin/sites")
+def admin_sites(user=CurrentUser):
+    """Registre des sites (consultable par tous, modifiable par le propriétaire)."""
+    with db.tx() as c:
+        return db.rows(c.execute("SELECT * FROM site_policies ORDER BY platform"))
+
+
+class SitePolicyIn(BaseModel):
+    mode_max: str
+    notes: str = ""
+    terms_checked: bool = False
+
+
+@app.put("/api/admin/sites/{domain}")
+def admin_site_update(domain: str, body: SitePolicyIn, user=CurrentUser):
+    if body.mode_max not in ("auto", "assisted", "manual"):
+        raise HTTPException(422, "Niveau : auto, assisted ou manual.")
+    with db.tx() as c:
+        if not _is_owner(c, user["id"]):
+            raise HTTPException(403, "Réservé au propriétaire.")
+        if not c.execute("SELECT 1 FROM site_policies WHERE domain=?", (domain,)).fetchone():
+            raise HTTPException(404, "Site inconnu.")
+        c.execute("UPDATE site_policies SET mode_max=?, notes=?, terms_checked_at=CASE WHEN ?=1 THEN ? ELSE terms_checked_at END, updated_at=? WHERE domain=?",
+                  (body.mode_max, body.notes, int(body.terms_checked), db.now(), db.now(), domain))
+        audit(c, user["id"], "registre_sites", f"{domain} → {body.mode_max}")
+    return {"ok": True}
 
 
 @app.get("/api/dashboard")

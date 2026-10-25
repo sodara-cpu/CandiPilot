@@ -78,7 +78,7 @@ try:
         page.fill("input[name=password]", "motdepasse1"); page.fill("input[name=confirm]", "motdepasse1")
         page.get_by_role("button", name="Créer mon compte").click()
         check(until(lambda: api.get(BASE + "/api/agent/status").json().get("linked"), 30), "extension reliée toute seule au compte")
-        check(page.evaluate("document.documentElement.dataset.candipilotExtension") == "0.1.0", "l'appli voit que l'extension est installée")
+        check(page.evaluate("document.documentElement.dataset.candipilotExtension") == json.load(open(ROOT / "extension/manifest.json"))["version"], "l'appli voit que l'extension est installée")
 
         api.put(BASE + "/api/profile", data={"phone": "+33600000000", "availability": "Mars 2027", "gender": "Homme"})
         api.post(BASE + "/api/documents", multipart={"type": "cv", "file": {"name": "Mon_CV.pdf", "mimeType": "application/pdf", "buffer": PDF}})
@@ -121,7 +121,7 @@ try:
         check(get("Banque Orsay")["letter_needed"] == 1 and get("Acme SA")["questions"] == [{"label": "Pourquoi notre fonds ?", "answer": ""}],
               "formulaires lus : lettre demandée, question du recruteur")
         api.put(BASE + f"/api/applications/{apps['Acme SA']}", data={"questions": [{"label": "Pourquoi notre fonds ?", "answer": "Pour sa stratégie de dette privée."}]})
-        api.put(BASE + "/api/workflow", data={"submit_mode": "auto"})
+        api.put(BASE + "/api/workflow", data={"submit_mode": "auto", "auto_consent": True})
         subs = lambda: json.loads(urllib.request.urlopen(BASE + "/fake-jobteaser/_submissions").read())
         check(subs() == [], "rien n'est envoyé avant « Valider et démarrer »")
         r = api.post(BASE + "/api/launch")

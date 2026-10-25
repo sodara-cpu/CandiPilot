@@ -132,7 +132,7 @@ def _payload(c, job: dict) -> Optional[dict]:
                    answers={q["label"]: q.get("answer", "") for q in db.jload(a["questions"], []) if q.get("answer", "").strip()},
                    cv={"ref": cv["chemin"], "name": cv["name"]} if cv else None,
                    letter={"ref": a["letter_path"], "name": letter[0]} if letter else None,
-                   company=a["entreprise"], role=a["poste"])
+                   company=a["entreprise"], role=a["poste"], key=a["idempotency_key"])
     return out
 
 
@@ -157,6 +157,7 @@ def next_job(response: Response, user=Agent):
                 c.execute("UPDATE jobs SET statut='termine', updated_at=? WHERE id=?", (db.now(), job["id"]))
                 continue
             c.execute("UPDATE jobs SET statut='en_cours', claimed_at=?, updated_at=? WHERE id=?", (db.now(), db.now(), job["id"]))
+            worker.log_event("agent_claim", user=user["id"], job=job["id"], type=job["type"])
             if job["type"] == "prepare":
                 c.execute("UPDATE applications SET statut='preparation', updated_at=? WHERE id=? AND statut IN ('decouverte','qualifiee','a_valider','echec')",
                           (db.now(), job["application_id"]))
@@ -201,7 +202,13 @@ def job_result(job_id: str, body: ResultIn, user=Agent):
     elif job["type"] == "prepare":
         worker.finish_prepare(job, d.get("info") or {})
     elif job["type"] == "submit":
-        worker.finish_submit(job, str(d.get("status") or "failed"), str(d.get("detail") or "")[:500])
+        with db.tx() as c:
+            current = (worker.load_app(c, job["application_id"]) or {}).get("idempotency_key", "")
+        if d.get("key") and current and d["key"] != current:
+            # Résultat d'un ancien essai (navigateur resté ouvert, double clic…) : ignoré, pas de double comptage.
+            worker.log_event("submit_result_ignored", job=job_id, reason="clé d'idempotence différente")
+        else:
+            worker.finish_submit(job, str(d.get("status") or "failed"), str(d.get("detail") or "")[:500])
     elif job["type"] == "verify":
         worker.finish_verify(job, bool(d.get("ok")))
     elif job["type"] == "check_sites":
@@ -209,6 +216,7 @@ def job_result(job_id: str, body: ResultIn, user=Agent):
     with db.tx() as c:
         c.execute("UPDATE jobs SET statut=?, progress=?, updated_at=? WHERE id=?",
                   ("termine" if body.ok else "erreur", (body.error or "")[:300], db.now(), job_id))
+    worker.log_event("agent_result", user=user["id"], job=job_id, type=job["type"], ok=body.ok, status=d.get("status"))
     return {"ok": True}
 
 

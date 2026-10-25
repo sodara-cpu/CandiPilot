@@ -156,7 +156,7 @@ async function execute(job) {
   switch (job.type) {
     case "search": return await doSearch(job);
     case "prepare": return { info: await run(await robotTab(job.url), jtInspect) };
-    case "submit": return await doSubmit(job);
+    case "submit": return { ...(await doSubmit(job)), key: job.key };      // clé d'idempotence renvoyée telle quelle
     case "verify": return { ok: await run(await robotTab(job.url), jtAlreadyApplied) };
     case "check_sites": {
       const cfg = await api("/api/agent/config");
