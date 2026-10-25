@@ -1,0 +1,12 @@
+{
+ "active": "v1",
+ "versions": {
+  "v1": {
+   "file": "champs-v1.npz",
+   "judge_accuracy": 91.4,
+   "judge_fields": 324,
+   "exported": "2026-10-25",
+   "same_as_pytorch": 100.0
+  }
+ }
+}

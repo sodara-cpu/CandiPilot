@@ -206,18 +206,56 @@ class FieldsIn(BaseModel):
     url: str = ""
 
 
+# Rôles reconnus par le réseau de neurones des champs → valeur du profil (les autres rôles ne sont jamais remplis ici).
+MODEL_SURE = 0.85
+# Rôles où le réseau fait au moins aussi bien que les règles sur le juge (vrais formulaires vérifiés à la main) :
+# il n'est utilisé que là. E-mail, téléphone, consentement : les règles restent meilleures pour l'instant.
+MODEL_ROLES = ("first_name", "last_name", "full_name", "city", "linkedin", "school")
+
+
+def _model_answers(fields: list, ctx: dict, email: str) -> tuple:
+    """Niveau 2 : le réseau de neurones (apprentissage/) identifie le rôle des champs non reconnus par les règles.
+    Renvoie (réponses, champs restants pour Claude, champs à ne jamais remplir)."""
+    from . import fieldmodel
+    p = ctx["profile"]
+    full = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+    values = {"first_name": p.get("first_name"), "last_name": p.get("last_name"), "full_name": full, "email": email,
+              "phone": p.get("phone"), "linkedin": p.get("linkedin"), "city": p.get("location"), "availability": p.get("availability"),
+              "school": " – ".join(x for x in (p.get("school"), p.get("program")) if x)}
+    champs = [{"tag": f.get("tag", "input"), "type": f.get("input_type", ""), "name": f.get("name", ""), "id": f.get("html_id", ""),
+               "placeholder": f.get("placeholder", ""), "aria_label": f.get("aria_label", ""), "autocomplete": f.get("autocomplete", ""),
+               "label": f.get("field_label") or f.get("label", ""), "text": "", "context": f.get("context", ""),
+               "required": f.get("required", False), "options": f.get("options") or []} for f in fields]
+    preds = fieldmodel.predict(champs)
+    answers, rest, never = [], [], 0
+    for f, (role, prob) in zip(fields, preds or [("other", 0.0)] * len(fields)):
+        if prob >= MODEL_SURE and role in ("consent", "submit", "next"):
+            never += 1                                        # consentement, bouton : jamais rempli automatiquement
+        elif prob >= MODEL_SURE and role in MODEL_ROLES and values.get(role) and not f.get("options"):
+            answers.append({"id": f["id"], "value": str(values[role]), "ok": True, "source": f"réseau ({role}, {prob:.0%})"})
+        else:
+            rest.append(f)
+    return answers, rest, never
+
+
 @router.post("/api/agent/fields")
 def agent_fields(body: FieldsIn, user=Agent):
-    """Agent de remplissage : Claude propose une valeur pour chaque champ que l'extension n'a pas compris (intitulés et
-    choix seulement, jamais le contenu de la page). Rien n'est envoyé : le candidat vérifie (pointillés violets)."""
+    """Agent de remplissage, pour les champs que les règles de l'extension n'ont pas compris (intitulés et choix
+    seulement, jamais le contenu de la page) : 1) le réseau de neurones des champs reconnaît les champs du profil ;
+    2) Claude répond aux questions propres à l'entreprise. Rien n'est envoyé : le candidat vérifie."""
     from . import llm
     fields = [f for f in body.fields if isinstance(f, dict) and isinstance(f.get("id"), int)][:40]
-    if not fields or not llm.enabled():
+    if not fields:
         return {"answers": [], "ai": llm.enabled()}
     with db.tx() as c:
-        if llm.budget_left(c, user["id"]) < llm.FIELDS_COST:
-            return {"answers": [], "ai": True, "detail": "Limite quotidienne de l'IA atteinte."}
         ctx = robot.load_context(c, user["id"])
+    model_out, fields, never = _model_answers(fields, ctx, ctx["email"])
+    worker.log_event("fields_model", user=user["id"], recognized=len(model_out), excluded=never, left=len(fields))
+    if not fields or not llm.enabled():
+        return {"answers": model_out, "ai": llm.enabled()}
+    with db.tx() as c:
+        if llm.budget_left(c, user["id"]) < llm.FIELDS_COST:
+            return {"answers": model_out, "ai": True, "detail": "Limite quotidienne de l'IA atteinte."}
         offer, answers = None, {}
         job = c.execute("SELECT application_id FROM jobs WHERE id=? AND user_id=?", (body.job_id, user["id"])).fetchone() if body.job_id else None
         if job and job["application_id"]:
@@ -231,11 +269,11 @@ def agent_fields(body: FieldsIn, user=Agent):
         out, usage = llm.map_fields(fields, ctx, offer, answers)
     except Exception as e:
         worker.log_event("fields_error", user=user["id"], error=f"{type(e).__name__}: {e}"[:300])
-        return {"answers": [], "ai": True, "detail": "L'IA n'a pas pu répondre."}
+        return {"answers": model_out, "ai": True, "detail": "L'IA n'a pas pu répondre."}
     with db.tx() as c:
         llm.record_usage(c, user["id"], llm.FIELDS_COST, usage)
     worker.log_event("fields_mapped", user=user["id"], fields=len(fields), answered=len(out), **usage)
-    return {"answers": out, "ai": True}
+    return {"answers": model_out + [dict(a, source="claude") for a in out], "ai": True}
 
 
 @router.post("/api/agent/jobs/{job_id}/partial")

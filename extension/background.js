@@ -289,7 +289,7 @@ async function fillFrames(tabId, profile, files, ctx = {}) {
     out.ai.push(...names);
     out.todo = out.todo.filter((t) => !names.some((n) => t.startsWith(n.slice(0, 30))));
   }
-  out.check.push(...out.ai.map((n) => n + " (IA)"));
+  out.check.push(...out.ai);
   return out;
 }
 self.fillTab = fillTab;          // accessible aux tests

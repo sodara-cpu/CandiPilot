@@ -165,7 +165,12 @@ export function fillForm(profile, files) {
     }
     if (!d.label || CONSENT.test(d.label)) return;
     const id = window.__cpUnknown.push(d) - 1;
-    report.unknown.push({ id, label: d.label, type: d.type, options: d.options, required: !!el.required || el.getAttribute("aria-required") === "true" });
+    const { strong } = labelOf(el);
+    report.unknown.push({ id, label: d.label, type: d.type, options: d.options, required: !!el.required || el.getAttribute("aria-required") === "true",
+      // pour le réseau de neurones des champs (apprentissage/) : mêmes informations qu'à l'entraînement
+      tag: el.tagName.toLowerCase(), input_type: el.type || "", name: el.name || "", html_id: el.id || "",
+      placeholder: el.getAttribute("placeholder") || "", aria_label: el.getAttribute("aria-label") || "",
+      autocomplete: el.getAttribute("autocomplete") || "", field_label: strong.split(" | ")[0] || "", context: question(el) });
   };
   const fillOne = (el) => {
     const [r, conf] = guess(el), { strong, weak } = labelOf(el), label = (strong || weak).split(" | ")[0] || r;
@@ -223,6 +228,7 @@ export function applyFieldAnswers(answers) {
   };
   const mark = (el) => { el.style.outline = "3px dashed #6D5EFC"; el.style.outlineOffset = "2px"; };
   const labelText = (r) => clean((r.id && r.getRootNode().querySelector(`label[for="${CSS.escape(r.id)}"]`)?.innerText) || r.closest("label")?.innerText || r.value);
+  const who = (a) => (String(a.source || "").startsWith("réseau") ? " (réseau de neurones)" : " (Claude)");
   const done = [];
   for (const a of answers || []) {
     const d = (window.__cpUnknown || [])[a.id];
@@ -230,11 +236,11 @@ export function applyFieldAnswers(answers) {
     const v = clean(a.value);
     if (d.type === "radio") {
       const r = d.els.find((x) => labelText(x) === v) || d.els.find((x) => labelText(x).includes(v) || v.includes(labelText(x)));
-      if (r && !r.checked) { r.click(); mark(r.parentElement || r); done.push(d.label); }
+      if (r && !r.checked) { r.click(); mark(r.parentElement || r); done.push(d.label + who(a)); }
     } else if (d.type === "select") {
       const el = d.els[0], o = [...el.options].find((x) => clean(x.text) === v) || [...el.options].find((x) => clean(x.text).includes(v));
-      if (o) { setValue(el, o.value); mark(el); done.push(d.label); }
-    } else if (!d.els[0].value) { setValue(d.els[0], a.value); mark(d.els[0]); done.push(d.label); }
+      if (o) { setValue(el, o.value); mark(el); done.push(d.label + who(a)); }
+    } else if (!d.els[0].value) { setValue(d.els[0], a.value); mark(d.els[0]); done.push(d.label + who(a)); }
   }
   return done;
 }
