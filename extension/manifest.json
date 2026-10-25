@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CandiPilot",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Ton copilote de candidatures : cherche et postule avec tes propres sessions (JobTeaser…), remplit n'importe quel formulaire.",
   "permissions": [
     "storage",
@@ -17,6 +17,12 @@
     "https://*.welcometothejungle.com/*",
     "https://*.greenhouse.io/*",
     "https://*.lever.co/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.myworkdaysite.com/*",
+    "https://*.smartrecruiters.com/*",
+    "https://*.ashbyhq.com/*",
+    "https://*.workable.com/*",
+    "https://*.teamtailor.com/*",
     "https://*.onrender.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"

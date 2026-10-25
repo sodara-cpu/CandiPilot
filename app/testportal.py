@@ -174,10 +174,12 @@ _SUBMIT = """<button type="submit">Submit application</button></form>"""
 
 
 @router.get("/fake-ats/apply/greenhouse")
-def fake_apply_greenhouse():
-    """Formulaire au balisage de Greenhouse (job-boards) : champ du CV caché derrière un bouton, questions maison."""
+def fake_apply_greenhouse(real: int = 0):
+    """Formulaire au balisage de Greenhouse (job-boards) : champ du CV caché derrière un bouton, questions maison.
+    real=1 : l'envoi (par le candidat) affiche la page de confirmation, comme le vrai site."""
+    done = "document.body.innerHTML='<h1>Thank you for applying!</h1><p>Your application has been submitted.</p>';" if real else ""
     return _page("Apply — Acme (Greenhouse)", """
-      <form id="application-form" class="application--form" onsubmit="window.submitted = true; return false;">
+      <form id="application-form" class="application--form" onsubmit="window.submitted = true; """ + done + """ return false;">
         <label for="first_name">First Name*</label><input id="first_name" type="text"><br>
         <label for="last_name">Last Name*</label><input id="last_name" type="text"><br>
         <label for="email">Email*</label><input id="email" type="text"><br>
@@ -188,6 +190,13 @@ def fake_apply_greenhouse():
         <label for="question_902">Are you legally authorized to work in France?*</label><input id="question_902" type="text"><br>
         <label><input type="checkbox" id="gdpr"> I consent to the processing of my data</label><br>
         """ + _SUBMIT)
+
+
+@router.get("/fake-ats/offer/greenhouse")
+def fake_offer_greenhouse():
+    """Page d'offre d'une entreprise : description puis bouton « Apply for this job » vers le formulaire."""
+    return _page("Stage Audit — Acme", """<h1>Stage Audit (H/F)</h1><p>Missions : audit financier, Excel.</p>
+      <a href="/fake-ats/apply/greenhouse?real=1">Apply for this job</a>""")
 
 
 @router.get("/fake-ats/apply/lever")

@@ -220,6 +220,46 @@ try:
         check(sw.evaluate(f"framesNeedingAccess({tid})") == ["https://apply.example.org"], "site non autorisé repéré : l'accès sera demandé au candidat")
         check(sw.evaluate(f"framesNeedingAccess({tab_id})") == [], "aucune demande d'accès inutile")
 
+        # 5c. Offre sur le site d'une entreprise (SmartRecruiters…) : dossier préparé par le serveur, sans l'extension.
+        s = api.post(BASE + "/api/offers", data={"url": "https://jobs.smartrecruiters.com/acme/123", "poste": "Stage Audit",
+                                                 "entreprise": "Acme Audit", "apply_type": "external"})
+        ext_app = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
+        api.post(BASE + f"/api/applications/{ext_app}/prepare")
+        a = until(lambda: (lambda x: x if x["statut"] != "preparation" else None)(api.get(BASE + f"/api/applications/{ext_app}").json()), 30)
+        check(a and a["statut"] == "a_valider" and a["mode"] == "manual" and "Remplir ce formulaire" in a["detail"],
+              "offre sur le site d'une entreprise : dossier préparé par le serveur (pas d'accès refusé dans l'extension)")
+
+        # 5d. Postuler sur le site de l'entreprise : l'extension ouvre l'offre, clique « Apply », remplit ; le candidat
+        #     envoie ; la page de confirmation sert de preuve.
+        s = api.post(BASE + "/api/offers", data={"url": BASE + "/fake-ats/offer/greenhouse", "poste": "Stage Audit",
+                                                 "entreprise": "Acme Corp", "apply_type": "external"})
+        site_app = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
+        api.post(BASE + f"/api/applications/{site_app}/prepare")
+        until(lambda: api.get(BASE + f"/api/applications/{site_app}").json()["statut"] == "a_valider", 30)
+        check(api.post(BASE + f"/api/applications/{site_app}/apply").status == 202, "« Postuler avec l'extension » sur une offre d'entreprise")
+        sw.evaluate("() => { poll(); return 1; }")          # l'extension prend la tâche (sans attendre la fin)
+        # (onglet ouvert par l'extension : piloté depuis l'extension, l'outil de test ne le voit pas)
+        tab_js = "chrome.tabs.query({}).then(t => (t.find(x => x.url.includes('/fake-ats/apply/greenhouse?real=1')) || {}).id || 0)"
+        site_tab = until(lambda: sw.evaluate(tab_js), 40)
+        check(bool(site_tab), "l'extension ouvre l'offre et suit le bouton « Apply for this job »")
+        in_tab = lambda js: sw.evaluate(f"chrome.scripting.executeScript({{target: {{tabId: {site_tab}}}, func: () => {js}}}).then(r => r[0].result)")
+        check(until(lambda: in_tab("document.querySelector('#first_name').value") == "Alex", 20)
+              and in_tab("document.querySelector('#resume').files.length") == 1, "formulaire de l'entreprise rempli (identité, CV)")
+        check(api.get(BASE + f"/api/applications/{site_app}").json()["statut"] == "soumission", "rien n'est envoyé sans le candidat")
+        in_tab("(document.querySelector('#question_902').value = 'Oui', document.querySelector('button[type=submit]').click(), 1)")   # le candidat envoie
+        a = until(lambda: (lambda x: x if x["statut"] == "confirmee" else None)(api.get(BASE + f"/api/applications/{site_app}").json()), 30)
+        check(a and "Thank you for applying" in a["preuve"], f"page de confirmation repérée : « Envoyée » avec preuve ({a and a['preuve'][:60]})")
+
+        s = api.post(BASE + "/api/offers", data={"url": "https://careers.exemple-inconnu.fr/job/42", "poste": "Stage Finance",
+                                                 "entreprise": "Inconnue SA", "apply_type": "external"})
+        unk = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
+        api.post(BASE + f"/api/applications/{unk}/prepare")
+        until(lambda: api.get(BASE + f"/api/applications/{unk}").json()["statut"] == "a_valider", 30)
+        api.post(BASE + f"/api/applications/{unk}/apply")
+        sw.evaluate("() => { poll(); return 1; }")
+        a = until(lambda: (lambda x: x if x["statut"] == "attente_utilisateur" else None)(api.get(BASE + f"/api/applications/{unk}").json()), 30)
+        check(a and "Autoriser les sites carrières" in a["detail"], "site carrières pas encore autorisé : « À toi de jouer » avec la marche à suivre")
+
         # 6. Sécurité du jeton.
         bad = urllib.request.Request(BASE + "/api/agent/next", headers={"Authorization": "Bearer faux"})
         try:

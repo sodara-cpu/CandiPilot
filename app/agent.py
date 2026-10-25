@@ -123,7 +123,7 @@ def _payload(c, job: dict) -> Optional[dict]:
     if not a:
         return None
     out["url"] = a["url"]
-    if kind == "submit":
+    if kind in ("submit", "apply"):
         prof = c.execute("SELECT gender FROM profiles WHERE user_id=?", (uid,)).fetchone()
         cv = c.execute("SELECT id, name, chemin FROM documents WHERE id=? AND user_id=?", (a["cv_document_id"], uid)).fetchone() \
             or robot.default_cv(c, uid)
@@ -144,16 +144,17 @@ def next_job(response: Response, urgent: int = 0, user=Agent):
         worker.release_stale(c)
         while True:
             # Les actions demandées par l'utilisateur passent avant les recherches (longues) et les vérifications de sites.
-            types = ("submit", "prepare", "verify") if urgent else worker.AGENT_TYPES
+            types = ("submit", "apply", "prepare", "verify") if urgent else worker.AGENT_TYPES
             j = c.execute(f"""SELECT * FROM jobs WHERE user_id=? AND statut='en_attente'
                               AND type IN ({','.join('?' * len(types))})
-                              ORDER BY CASE WHEN type IN ('submit','prepare','verify') THEN 0 ELSE 1 END, created_at LIMIT 1""",
+                              AND NOT (type='prepare' AND EXISTS (SELECT 1 FROM applications a JOIN offers o ON o.id=a.offer_id WHERE a.id=jobs.application_id AND o.apply_type<>'jobteaser'))
+                              ORDER BY CASE WHEN type IN ('submit','apply','prepare','verify') THEN 0 ELSE 1 END, created_at LIMIT 1""",
                           (user["id"], *types)).fetchone()
             if not j:
                 response.status_code = 204
                 return None
             job = db.row(j)
-            if job["type"] == "submit" and not worker.submit_guard(job):
+            if job["type"] in ("submit", "apply") and not worker.submit_guard(job):
                 c.execute("UPDATE jobs SET statut='termine', progress='Plus rien à envoyer', updated_at=? WHERE id=?", (db.now(), job["id"]))
                 continue
             payload = _payload(c, job)
@@ -225,14 +226,15 @@ def job_result(job_id: str, body: ResultIn, user=Agent):
         worker.finish_search(job, d.get("found") or [], d.get("stats") or {})
     elif job["type"] == "prepare":
         worker.finish_prepare(job, d.get("info") or {})
-    elif job["type"] == "submit":
+    elif job["type"] in ("submit", "apply"):
         with db.tx() as c:
             current = (worker.load_app(c, job["application_id"]) or {}).get("idempotency_key", "")
         if d.get("key") and current and d["key"] != current:
             # Résultat d'un ancien essai (navigateur resté ouvert, double clic…) : ignoré, pas de double comptage.
             worker.log_event("submit_result_ignored", job=job_id, reason="clé d'idempotence différente")
         else:
-            worker.finish_submit(job, str(d.get("status") or "failed"), str(d.get("detail") or "")[:500])
+            worker.finish_submit(job, str(d.get("status") or "failed"), str(d.get("detail") or "")[:500],
+                                 str(d.get("proof") or "")[:300])
     elif job["type"] == "verify":
         worker.finish_verify(job, bool(d.get("ok")))
     elif job["type"] == "check_sites":

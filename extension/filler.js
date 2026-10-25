@@ -130,6 +130,9 @@ export function fillForm(profile, files) {
   const values = { first_name: profile.first_name, last_name: profile.last_name, full_name: profile.full_name, email: profile.email,
     phone: profile.phone, linkedin: profile.linkedin, city: profile.city, school: profile.school, availability: profile.availability };
   const GENDER = { homme: /^(m|mr|m\.|monsieur|homme|male|man)$/i, femme: /^(mme|mrs|ms|madame|femme|female|woman)$/i, autre: /autre|other|non/i };
+  const nq = (t) => clean(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const ANSWERS = Object.entries(profile.answers || {}).map(([q, a]) => [nq(q), a]).filter(([q, a]) => q.length >= 6 && a);
+  const answerFor = (label) => { const l = nq(label); const hit = ANSWERS.find(([q]) => l.includes(q) || (l.length >= 6 && q.includes(l))); return hit ? hit[1] : ""; };
   const usable = (el) => !["hidden", "submit", "button", "reset", "image", "password", "search"].includes(el.type) && !el.disabled
     && (el.offsetParent !== null || el.type === "file");      // les plateformes cachent souvent le champ du CV derrière un bouton
 
@@ -149,6 +152,9 @@ export function fillForm(profile, files) {
       const opt = [...el.options].find((o) => g.test(clean(o.text)) || g.test(o.value));
       if (opt) { setValue(el, opt.value); return done(how); }
     } else if (values[r] && el.tagName !== "SELECT") { setValue(el, values[r]); return done(how); }
+    // Question du recruteur à laquelle le candidat a déjà répondu dans CandiPilot : réponse reprise (à vérifier).
+    const ans = answerFor(strong || weak);
+    if (ans && (el.tagName === "TEXTAREA" || el.type === "text" || !el.type)) { setValue(el, ans); return done("check"); }
     mark(el, "todo"); report.todo.push(label);
   };
   const pass = () => {

@@ -32,7 +32,9 @@ from . import db, files, llm, matching, migrations, robot
 
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
 ROBOT = "simule" if FAKE else (os.environ.get("CANDIPILOT_ROBOT") or "extension")
-AGENT_TYPES = ("search", "prepare", "submit", "verify", "check_sites")
+AGENT_TYPES = ("search", "prepare", "submit", "apply", "verify", "check_sites")
+# apply : candidature sur le site d'une entreprise — l'extension ouvre l'offre, remplit le formulaire, le candidat
+#         clique « Envoyer », l'extension repère la page de confirmation (preuve).
 STALE_MIN = 20          # tâche prise par une extension sans réponse depuis 20 min
 POLL_S = 2
 _stop = threading.Event()
@@ -188,6 +190,7 @@ def finish_prepare(job: dict, info: dict) -> None:
 
 
 def finish_submit(job: dict, status: str, detail: str, proof: str = "") -> None:
+    """Résultat d'un envoi (JobTeaser) ou d'une candidature sur le site d'une entreprise (apply)."""
     uid, app_id = job["user_id"], job["application_id"]
     with db.tx() as c:
         a = load_app(c, app_id)
@@ -200,7 +203,7 @@ def finish_submit(job: dict, status: str, detail: str, proof: str = "") -> None:
         elif status == "uncertain":
             _set_app(c, app_id, statut="incertaine", detail=detail)
             db.add_event(c, uid, "warning", f"Envoi non confirmé pour {a['entreprise']} : vérification à faire.", app_id)
-        elif status in ("login", "captcha"):
+        elif status in ("login", "captcha", "permission"):
             # Le robot s'arrête et passe la main : il ne contourne jamais une vérification anti-robot.
             if status == "login":
                 c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
@@ -281,7 +284,8 @@ def run_prepare(job: dict) -> None:
         info = {"kind": "easy" if a["apply_type"] == "jobteaser" else "external",
                 "letter": True, "questions": fake_q, "detail": "Formulaire lu (robot simulé)."}
     elif a["apply_type"] != "jobteaser":
-        info = {"kind": "external", "letter": False, "questions": [], "detail": "Candidature sur le site de l'entreprise : envoi manuel."}
+        info = {"kind": "external", "letter": False, "questions": [],
+                "detail": "Dossier prêt. Ouvre l'offre, clique « Remplir ce formulaire » dans l'extension, vérifie puis envoie."}
     else:
         if not jobteaser_ready(job["user_id"], a["id"]):
             return
@@ -505,7 +509,18 @@ def run_rank(job: dict) -> None:
                 enqueue(c, uid, "rank")        # il en reste : on continue (dans la limite du plafond quotidien)
 
 
-HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify, "discover": run_discover,
+def run_apply(job: dict) -> None:
+    """Candidature sur le site d'une entreprise : faite par l'extension. Simulée en mode test ; impossible en robot local."""
+    if not submit_guard(job):
+        return
+    if FAKE:
+        finish_submit(job, "submitted", "Formulaire rempli par l'extension, envoyé par toi (simulé).",
+                      proof="Page de confirmation de l'entreprise (simulée)")
+    else:
+        finish_submit(job, "failed", "Candidature sur le site de l'entreprise : installe l'extension CandiPilot.")
+
+
+HANDLERS = {"apply": run_apply, "search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify, "discover": run_discover,
             "rank": run_rank}
 SERVER_TYPES = ("discover", "rank")   # toujours exécutées par le serveur, même en mode extension
 
@@ -516,7 +531,10 @@ def _next_job():
     """Prochaine tâche exécutée sur le serveur (modes simulé et local ; en mode extension, c'est agent.py)."""
     with db.tx() as c:
         if ROBOT == "extension":       # le navigateur de l'utilisateur fait le reste (agent.py)
-            r = c.execute(f"""SELECT * FROM jobs WHERE statut='en_attente' AND type IN ({",".join("?" * len(SERVER_TYPES))})
+            # + préparation d'une offre sur le site d'une entreprise : CV et lettre, sans navigateur (le formulaire sera
+            #   rempli par l'extension au moment de postuler).
+            r = c.execute(f"""SELECT * FROM jobs WHERE statut='en_attente' AND (type IN ({",".join("?" * len(SERVER_TYPES))})
+                             OR (type='prepare' AND EXISTS (SELECT 1 FROM applications a JOIN offers o ON o.id=a.offer_id WHERE a.id=jobs.application_id AND o.apply_type<>'jobteaser')))
                              ORDER BY created_at LIMIT 1""", SERVER_TYPES).fetchone()
         else:
             r = c.execute("""SELECT * FROM jobs WHERE statut='en_attente' AND type<>'check_sites'
@@ -556,7 +574,7 @@ def release_stale(c) -> None:
     limit = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MIN)).isoformat(timespec="seconds")
     # Sans nouvelle depuis 20 min (ni prise en charge, ni progression) : l'extension a été fermée.
     for j in c.execute("SELECT * FROM jobs WHERE statut='en_cours' AND claimed_at<>'' AND updated_at<?", (limit,)).fetchall():
-        if j["type"] == "submit":
+        if j["type"] in ("submit", "apply"):
             c.execute("UPDATE jobs SET statut='erreur', progress='Navigateur fermé pendant l''envoi', updated_at=? WHERE id=?",
                       (db.now(), j["id"]))
             _set_app(c, j["application_id"], statut="incertaine",

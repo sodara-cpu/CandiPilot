@@ -56,4 +56,13 @@ $("fill").onclick = async () => {
        ${r.steps ? `<div class="muted">Formulaire en plusieurs étapes : clique toi-même sur « Suivant », les champs suivants se remplissent tout seuls.</div>` : ""}
        <div class="muted">Rien n'est envoyé : relis, puis envoie toi-même.</div>`;
 };
+// Autorisation unique pour tous les sites carrières (candidatures sur le site des entreprises).
+const ALL = { origins: ["https://*/*"] };
+chrome.permissions.contains(ALL).then((ok) => { $("grantAll").hidden = $("grantInfo").hidden = ok; });
+$("grantAll").onclick = async () => {
+  const ok = await chrome.permissions.request(ALL);
+  $("grantAll").hidden = $("grantInfo").hidden = ok;
+  $("fillResult").innerHTML = ok ? `<span class="ok">✓ Sites carrières autorisés : reviens sur CandiPilot et clique « Reprendre l'envoi » si besoin.</span>`
+    : `<span class="ko">Autorisation refusée : CandiPilot ne pourra remplir que les plateformes connues.</span>`;
+};
 draw();

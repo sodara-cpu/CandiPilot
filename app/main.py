@@ -968,9 +968,32 @@ def retry(app_id: str, user=CurrentUser):
     with db.tx() as c:
         a = _app_or_404(c, app_id, user["id"])
     # Le dossier revient dans le récapitulatif : il ne repart qu'après « Valider et démarrer le robot ».
-    _transition(app_id, user["id"], ("echec",), statut="a_valider" if a["letter_path"] else "qualifiee", detail="",
+    # Dossier jamais préparé (échec pendant la préparation) : la préparation est relancée tout de suite.
+    prepared = bool(a["letter_path"])
+    _transition(app_id, user["id"], ("echec",), statut="a_valider" if prepared else "preparation", detail="",
                 selected=1, launched=0)
+    if not prepared:
+        with db.tx() as c:
+            worker.enqueue(c, user["id"], "prepare", app_id)
     return get_application(app_id, user)
+
+
+@app.post("/api/applications/{app_id}/apply", status_code=202)
+def apply_on_site(app_id: str, user=CurrentUser):
+    """Candidature sur le site de l'entreprise avec l'extension : elle ouvre l'offre et remplit le formulaire ; le
+    candidat vérifie et clique « Envoyer » ; la page de confirmation sert de preuve."""
+    with db.tx() as c:
+        a = _app_or_404(c, app_id, user["id"])
+        if a["apply_type"] == "jobteaser":
+            raise HTTPException(422, "Offre JobTeaser : utilise « Valider et démarrer le robot » dans le récapitulatif.")
+        if a["statut"] not in ("a_valider", "echec", "incertaine", "attente_utilisateur"):
+            raise HTTPException(409, "Prépare d'abord ce dossier (CV et lettre), puis postule.")
+        worker._set_app(c, app_id, statut="soumission", selected=1, launched=1, idempotency_key=db.new_id(),
+                        detail="L'extension ouvre l'offre et remplit le formulaire : vérifie puis clique « Envoyer ».")
+        jid = worker.enqueue(c, user["id"], "apply", app_id)
+        db.add_event(c, user["id"], "info", f"Candidature en cours sur le site de {a['entreprise']}.", app_id)
+    worker.log_event("apply_started", user=user["id"], application=app_id)
+    return {"job_id": jid}
 
 
 @app.post("/api/applications/{app_id}/resume", status_code=202)
@@ -982,7 +1005,7 @@ def resume(app_id: str, user=CurrentUser):
         if a["statut"] != "attente_utilisateur":
             raise HTTPException(409, "Cette candidature n'attend pas d'action de ta part.")
         worker._set_app(c, app_id, statut="soumission", detail="Reprise demandée par toi.")
-        jid = worker.enqueue(c, user["id"], "submit", app_id)
+        jid = worker.enqueue(c, user["id"], "apply" if a["apply_type"] != "jobteaser" else "submit", app_id)
         db.add_event(c, user["id"], "info", f"Envoi repris : {a['entreprise']}.", app_id)
     worker.log_event("submit_resumed", user=user["id"], application=app_id)
     return {"job_id": jid}

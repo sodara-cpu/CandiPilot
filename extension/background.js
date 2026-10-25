@@ -195,6 +195,7 @@ async function execute(job) {
     case "search": return await doSearch(job);
     case "prepare": return { info: await run(await robotTab(job.url), jtInspect) };
     case "submit": return { ...(await doSubmit(job)), key: job.key };      // clé d'idempotence renvoyée telle quelle
+    case "apply": return { ...(await doApply(job)), key: job.key };
     case "verify": return { ok: await run(await robotTab(job.url), jtAlreadyApplied) };
     case "check_sites": {
       const cfg = await api("/api/agent/config");
@@ -265,6 +266,10 @@ function fillTab(tabId) { return exclusive(() => fillTabNow(tabId)); }
 async function fillTabNow(tabId) {
   const profile = await api("/api/agent/profile");
   const files = { cv: await fileB64(profile.cv), letter: await fileB64(profile.letter) };
+  return await fillFrames(tabId, profile, files);
+}
+
+async function fillFrames(tabId, profile, files) {
   // Dans chaque cadre de la page : les formulaires Greenhouse ou Lever sont souvent intégrés dans un cadre (iframe).
   const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: fillForm, args: [profile, files] });
   const out = { filled: [], check: [], todo: [], total: 0, platform: "", steps: false, watching: false };
@@ -276,6 +281,77 @@ async function fillTabNow(tabId) {
   return out;
 }
 self.fillTab = fillTab;          // accessible aux tests
+
+// ---------- candidature sur le site d'une entreprise ----------
+async function waitLoaded(tabId) {
+  for (let i = 0; i < 100; i++) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t) return false;
+    if (t.status === "complete" && t.url && !t.url.startsWith("about:")) break;
+    await sleep(300);
+  }
+  await sleep(1000);
+  return true;
+}
+
+// Page d'offre : si le formulaire n'est pas affiché, le bouton « Postuler / Apply » (lien suivi dans le même onglet).
+function openApplyForm() {
+  const visible = (e) => e.offsetParent !== null;
+  const fields = [...document.querySelectorAll("input[type=text], input[type=email], input:not([type]), input[type=file], textarea")].filter(visible);
+  if (fields.length >= 3) return { form: true };
+  const RE = /^(postuler|je postule|postuler maintenant|candidater|déposer (ma|une) candidature|apply|apply now|apply for this (job|position)|start application|i'?m interested)\b/i;
+  const el = [...document.querySelectorAll("a, button, [role=button]")].find((e) => visible(e) && RE.test((e.innerText || e.getAttribute("aria-label") || "").trim()));
+  if (!el) return { form: false };
+  const href = el.tagName === "A" && el.getAttribute("href");
+  if (href && !href.startsWith("#") && !href.startsWith("javascript")) return { href: new URL(href, location.href).href };
+  el.click();
+  return { clicked: true };
+}
+
+// Page de confirmation après l'envoi (preuve) : phrase repérée et adresse de la page.
+function detectConfirmation() {
+  const RE = /(merci (pour|de) (votre|ta) candidature|nous avons bien reçu (votre|ta) candidature|candidature (a bien été |a été |bien )?(envoyée|reçue|transmise|enregistrée)|thank you for (applying|your application|your interest)|(your )?application (has been |was )?(submitted|received|sent)|we('ve| have) received your application)/i;
+  const m = (document.body.innerText || "").match(RE);
+  return m ? `${m[0]} — ${location.href}` : null;
+}
+
+async function doApply(job) {
+  const host = new URL(job.url).hostname;
+  if (!(await chrome.permissions.contains({ origins: [new URL(job.url).origin + "/*"] })))
+    return { status: "permission", detail: `Autorise CandiPilot sur ${host} : clique sur l'icône CandiPilot (en haut à droite de Chrome) puis « Autoriser les sites carrières », et clique « Reprendre l'envoi ».` };
+  const profile = await api("/api/agent/profile");
+  profile.answers = job.answers || {};
+  const files = { cv: await fileB64(job.cv), letter: await fileB64(job.letter) };
+  const beat = (text) => api(`/api/agent/jobs/${job.id}/progress`, { method: "POST", body: { text } }).catch(() => {});
+  // Onglet visible : le candidat relit et envoie lui-même.
+  let tab = await chrome.tabs.create({ url: job.url, active: true });
+  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  await waitLoaded(tab.id);
+  const step = await run(tab.id, openApplyForm).catch(() => null);
+  if (step && step.href) { await chrome.tabs.update(tab.id, { url: step.href }); await waitLoaded(tab.id); }
+  else if (step && step.clicked) {
+    await sleep(2500);
+    const opened = (await chrome.tabs.query({})).find((t) => t.openerTabId === tab.id);   // « Postuler » ouvert dans un nouvel onglet
+    if (opened) tab = opened;
+    await waitLoaded(tab.id);
+  }
+  const target = new URL((await chrome.tabs.get(tab.id)).url || job.url).origin;
+  if (!(await chrome.permissions.contains({ origins: [target + "/*"] })))
+    return { status: "permission", detail: `Le formulaire est sur ${new URL(target).hostname} : clique sur l'icône CandiPilot puis « Autoriser les sites carrières », et clique « Reprendre l'envoi ».` };
+  const res = await fillFrames(tab.id, profile, files);
+  await beat(`Formulaire rempli (${res.filled.length + res.check.length} champs) : vérifie, complète l'orange et clique « Envoyer ».`);
+  // Attente de la page de confirmation (20 min), avec signe de vie au serveur.
+  for (let i = 0; i < 400; i++) {
+    await sleep(3000);
+    if (!(await chrome.tabs.get(tab.id).catch(() => null)))
+      return { status: "uncertain", detail: "Onglet fermé avant la confirmation : si tu as envoyé la candidature, clique « Je l'ai envoyée »." };
+    const proof = await run(tab.id, detectConfirmation).catch(() => null);
+    if (proof) return { status: "submitted", detail: `Envoyée par toi sur ${host} (formulaire rempli par CandiPilot)`, proof: "Page de confirmation : " + proof.slice(0, 250) };
+    if (i % 20 === 19) await beat("En attente de ton clic sur « Envoyer »…");
+  }
+  return { status: "uncertain", detail: "Pas de page de confirmation repérée en 20 min : si tu as envoyé, clique « Je l'ai envoyée »." };
+}
+self.doApply = doApply;
 
 // Formulaires intégrés (cadres) d'autres sites auxquels l'extension n'a pas encore accès (Workday, SmartRecruiters…).
 // La fenêtre de l'extension demande alors l'autorisation à l'utilisateur, une fois par site, au clic sur « Remplir ».

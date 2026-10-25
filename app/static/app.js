@@ -388,6 +388,7 @@ async function applicationView(id) {
 
   let banner = "";
   if (a.statut === "confirmee") banner = `<section class="card pad pop" style="background:var(--green-bg);border-color:var(--line-2)"><b style="color:var(--green)">Candidature envoyée</b><div style="font-size:14px;color:var(--green)">Preuve : ${esc(a.preuve)} · ${a.date_envoi ? new Date(a.date_envoi).toLocaleString("fr-FR") : ""}</div></section>`;
+  else if (a.statut === "soumission" && a.apply_type !== "jobteaser") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Candidature en cours sur le site de l'entreprise</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "L'extension ouvre l'offre dans un nouvel onglet de Chrome et remplit le formulaire.")} Vérifie, complète ce qui est en orange et clique « Envoyer » : CandiPilot repère la page de confirmation et la marque « Envoyée ».</div></section>`;
   else if (a.statut === "soumission") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Envoi en cours</b><div style="font-size:14px;color:var(--blue)">${a.mode === "assisted" ? "Le robot a ouvert le formulaire : vérifie-le et clique « Postuler maintenant » dans sa fenêtre." : "Le robot remplit et envoie le formulaire."} Elle passera en « Envoyée » seulement quand JobTeaser confirmera la réception.</div></section>`;
   else if (a.statut === "preparation") banner = `<section class="card pad" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Préparation en cours</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "Le robot rédige la lettre et lit le formulaire de candidature.")}</div></section>`;
   else if (a.statut === "echec") banner = `<section class="card pad" style="background:var(--red-bg);border-color:var(--line-2)"><b style="color:var(--red)">Échec</b><div style="font-size:14px;color:var(--red)">${esc(a.detail)}</div></section>`;
@@ -506,6 +507,7 @@ async function applicationView(id) {
   on("doIgnore", () => act(() => api(`/api/applications/${id}/ignore`, { method: "POST" }), "Offre ignorée.").then(() => go("#/envoi")));
   on("doRestore", () => act(() => api(`/api/applications/${id}/restore`, { method: "POST" }), "Offre restaurée.").then(route));
   on("doRetry", () => act(() => api(`/api/applications/${id}/retry`, { method: "POST" }), "Dossier remis dans le récapitulatif d'envoi.").then(route));
+  on("doApply", () => act(() => api(`/api/applications/${id}/apply`, { method: "POST" }), "L'extension ouvre l'offre dans un nouvel onglet de Chrome…").then(route));
   on("doResume", () => act(() => api(`/api/applications/${id}/resume`, { method: "POST" }), "Envoi repris : le robot recommence.").then(route));
   on("doVerify", () => act(() => api(`/api/applications/${id}/verify`, { method: "POST" }), "Vérification lancée.").then(route));
   on("doMarkSent", () => { if (confirm("Confirmes-tu avoir envoyé cette candidature toi-même ?")) act(() => api(`/api/applications/${id}/mark-sent`, { method: "POST" }), "Candidature marquée comme envoyée.").then(route); });
@@ -518,6 +520,13 @@ function actionsFor(a, busy) {
   const toRecap = `<a class="btn btn-ghost" href="#/envoi">Aller au récapitulatif d'envoi</a>`;
   if (s === "ignoree") return `<button class="btn btn-ghost" id="doRestore">Restaurer l'offre</button>`;
   if (s === "preparation" || busy) return `<button class="btn btn-ai" disabled><span class="spin"></span> Robot au travail…</button>`;
+  // Offre sur le site de l'entreprise : l'extension ouvre l'offre et remplit le formulaire, le candidat envoie.
+  if (s === "a_valider" && a.apply_type !== "jobteaser") return `
+    <button class="btn btn-primary" id="doApply">Postuler avec l'extension</button>
+    <p class="hint" style="margin:0">L'extension ouvre l'offre, remplit le formulaire (CV, lettre, réponses) ; tu vérifies et cliques « Envoyer ». La confirmation est repérée toute seule.</p>
+    <a class="btn btn-ghost" href="${esc(a.url)}" target="_blank" rel="noopener">Ouvrir le site de l'offre</a>
+    ${a.letter_path ? `<a class="btn btn-ghost" href="/api/applications/${a.id}/letter" target="_blank" rel="noopener">Télécharger la lettre</a>` : ""}
+    <button class="btn btn-quiet" id="doMarkSent">Je l'ai envoyée moi-même</button>`;
   if (["decouverte", "qualifiee", "a_valider"].includes(s) && !a.selected)
     return `<button class="btn btn-ai" id="doSelect">Sélectionner pour l'envoi</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
   if (["decouverte", "qualifiee"].includes(s)) return `<button class="btn btn-ai" id="doPrepare">Préparer le dossier</button><button class="btn btn-quiet" id="doUnselect">Retirer de la sélection</button>`;
