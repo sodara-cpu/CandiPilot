@@ -275,3 +275,15 @@ details.adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mu
 .why svg{flex:none;margin-top:2px;color:var(--violet)}
 .why-lg{font-size:14.5px;margin:0;padding:10px 14px;border-radius:12px;background:var(--violet-bg);color:var(--ink-2)}
 .ai-draft{border-color:var(--violet)!important;background:var(--violet-bg)}
+
+/* Sources d'offres : entreprises en avant, liste complète repliée */
+.srcchips{display:flex;flex-wrap:wrap;gap:6px}
+.srcchip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;font-size:13px;background:var(--card);color:var(--ink);text-decoration:none}
+.srcchip .n{background:var(--green-bg);color:var(--green);border-radius:999px;padding:0 7px;font-weight:700;font-size:12px}
+.srcchip.link:hover{border-color:var(--violet);color:var(--violet)}
+.srcmore{display:flex;flex-direction:column;gap:8px}
+.srcgrid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 12px;max-height:340px;overflow:auto}
+.srcgrid li{display:flex;align-items:center;gap:8px;padding:2px 4px;border-bottom:1px solid var(--line);font-size:13px}
+.srcgrid li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.srcgrid li .btn{padding:0 6px;min-height:24px}
+.srcchips.scroll{max-height:220px;overflow:auto;padding:2px}

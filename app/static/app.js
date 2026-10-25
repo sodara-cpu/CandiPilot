@@ -769,27 +769,34 @@ async function prefsView() {
 
 // ---------- sources d'offres : entreprises lues via les API publiques des plateformes de recrutement ----------
 function sourcesCard(src) {
-  const st = (x) => x.last_status.startsWith("erreur") ? `<span class="koc">${esc(x.last_status)}</span>` : `<span class="sub">${esc(x.last_status || "en attente")}</span>`;
-  const found = src.sources.reduce((n, x) => n + (x.last_count || 0), 0);
+  const all = [...src.sources].sort((x, y) => (y.last_count || 0) - (x.last_count || 0) || x.company.localeCompare(y.company, "fr"));
+  const withOffers = all.filter((x) => x.last_count > 0), found = withOffers.reduce((n, x) => n + x.last_count, 0);
+  const errors = all.filter((x) => x.last_status.startsWith("erreur")).length;
   const google = (n) => `https://www.google.com/search?q=${encodeURIComponent(n + " carrières stage alternance")}`;
   return `<section class="card pad stack" id="srcCard">
     <div class="spread"><div><h2>Mes sources d'offres</h2>
-      <div class="sub" style="font-size:14px">En plus de JobTeaser, CandiPilot lit directement les offres de <b>${src.sources.length} entreprises</b> sur leur plateforme de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Workable), sans compte ni robot.</div></div>
-      ${found ? `<span class="badge b-green">${found} offre${found > 1 ? "s" : ""} pour toi</span>` : ""}</div>
-    ${src.sources.length ? `<details class="adv"><summary>Entreprises suivies (${src.sources.length})</summary>
-      <ul class="sitelist" style="margin-top:8px">${src.sources.map((x) => `<li><b>${esc(x.company)}</b><span class="badge b-mute">${esc(x.platform_label)}</span>${st(x)}
-      <button class="btn btn-quiet btn-sm" data-delsrc="${x.id}" aria-label="Retirer ${esc(x.company)}">Retirer</button></li>`).join("")}</ul></details>` : ""}
-    <details class="adv"><summary>Ajouter une entreprise</summary>
-      <form id="srcForm" class="row" style="flex-wrap:wrap;margin-top:8px">
-        <input type="url" name="url" placeholder="Adresse de sa page carrières, ex. https://jobs.lever.co/entreprise" aria-label="Adresse de la page carrières" style="flex:1 1 300px" required>
-        <button class="btn btn-primary" type="submit">Ajouter</button></form>
-      ${src.suggestions.length ? `<div class="ob-f" aria-label="Entreprises retirées" style="margin-top:8px"><span class="hint" style="align-self:center">Retirées :</span>${src.suggestions.map((x) =>
-        `<button type="button" class="pill" data-sugg="${esc(JSON.stringify(x))}">+ ${esc(x.company)}</button>`).join("")}</div>` : ""}</details>
-    ${src.assisted?.length ? `<details class="adv"><summary>Autres entreprises : candidature assistée (${src.assisted.length})</summary>
-      <p class="hint" style="margin:8px 0">Leurs offres ne sont pas lisibles automatiquement (Workday, Taleo, site maison, LinkedIn, Welcome to the Jungle…).
-        Trouve l'offre sur leur site, ajoute-la avec « Ajouter une offre » (page Offres) en collant son adresse : CandiPilot prépare ton dossier
-        et l'extension remplit le formulaire. Tu cliques toi-même sur « Envoyer ».</p>
-      <div class="ob-f">${src.assisted.map((n) => `<a class="pill" href="${google(n)}" target="_blank" rel="noopener">${esc(n)} ↗</a>`).join("")}</div></details>` : ""}
+      <div class="sub" style="font-size:14px">En plus de JobTeaser, CandiPilot lit directement les offres de <b>${all.length} entreprises</b> sur leur plateforme de recrutement.</div></div>
+      ${found ? `<span class="badge b-green">${found} offre${found > 1 ? "s" : ""} pour toi</span>` : `<span class="badge b-mute">Lance une recherche</span>`}</div>
+    ${withOffers.length ? `<div><div class="hint" style="margin-bottom:6px">Entreprises qui ont des offres pour toi :</div>
+      <div class="srcchips">${withOffers.map((x) => `<span class="srcchip"><b>${esc(x.company)}</b><span class="n">${x.last_count}</span></span>`).join("")}</div></div>` : ""}
+    <div class="srcmore">
+      <details class="adv"><summary>Toutes les entreprises suivies (${all.length})${errors ? ` · <span class="koc">${errors} en erreur</span>` : ""}</summary>
+        <input type="search" id="srcFilter" placeholder="Rechercher une entreprise…" aria-label="Rechercher une entreprise" style="margin:10px 0 8px;width:100%">
+        <ul class="srcgrid">${all.map((x) => `<li data-name="${esc(x.company.toLowerCase())}" title="${esc(x.platform_label + " · " + (x.last_status || "en attente"))}">
+          <span class="nm">${esc(x.company)}</span><span class="${x.last_status.startsWith("erreur") ? "koc" : "sub"}">${x.last_status.startsWith("erreur") ? "erreur" : x.last_count ? x.last_count + " pour toi" : "—"}</span>
+          <button class="btn btn-quiet btn-sm" data-delsrc="${x.id}" aria-label="Retirer ${esc(x.company)}" title="Ne plus suivre">✕</button></li>`).join("")}</ul></details>
+      <details class="adv"><summary>Ajouter une entreprise</summary>
+        <form id="srcForm" class="row" style="flex-wrap:wrap;margin-top:10px">
+          <input type="url" name="url" placeholder="Adresse de sa page carrières, ex. https://jobs.lever.co/entreprise" aria-label="Adresse de la page carrières" style="flex:1 1 300px" required>
+          <button class="btn btn-primary" type="submit">Ajouter</button></form>
+        ${src.suggestions.length ? `<div class="ob-f" aria-label="Entreprises retirées" style="margin-top:8px"><span class="hint" style="align-self:center">Retirées :</span>${src.suggestions.map((x) =>
+          `<button type="button" class="pill" data-sugg="${esc(JSON.stringify(x))}">+ ${esc(x.company)}</button>`).join("")}</div>` : ""}</details>
+      ${src.assisted?.length ? `<details class="adv"><summary>Autres entreprises : candidature assistée (${src.assisted.length})</summary>
+        <p class="hint" style="margin:10px 0">Leurs offres ne sont pas lisibles automatiquement (Workday, Taleo, site maison…). Trouve l'offre sur leur site,
+          ajoute-la avec « Ajouter une offre » (page Offres) : CandiPilot prépare ton dossier et l'extension remplit le formulaire. Tu cliques toi-même sur « Envoyer ».</p>
+        <input type="search" id="asFilter" placeholder="Rechercher une entreprise (ex. BNP, L'Oréal)…" aria-label="Rechercher une entreprise en candidature assistée" style="margin:0 0 8px;width:100%">
+        <div class="srcchips scroll" id="asList">${src.assisted.map((n) => `<a class="srcchip link" data-name="${esc(n.toLowerCase())}" href="${google(n)}" target="_blank" rel="noopener">${esc(n)} ↗</a>`).join("")}</div></details>` : ""}
+    </div>
   </section>`;
 }
 
@@ -797,7 +804,11 @@ function bindSources() {
   const add = (body, msg) => act(() => api("/api/sources", { method: "POST", body }), msg).then(route).catch(() => {});
   document.getElementById("srcForm").onsubmit = (e) => { e.preventDefault(); const url = e.target.url.value.trim(); if (url) add({ url }, "Entreprise ajoutée : ses offres arrivent dans quelques instants."); };
   $app.querySelectorAll("[data-sugg]").forEach((b) => b.onclick = () => { b.disabled = true; add(JSON.parse(b.dataset.sugg), "Entreprise ajoutée."); });
-  $app.querySelectorAll("[data-delsrc]").forEach((b) => b.onclick = () => act(() => api(`/api/sources/${b.dataset.delsrc}`, { method: "DELETE" }), "Source retirée.").then(route));
+  $app.querySelectorAll("[data-delsrc]").forEach((b) => b.onclick = () => act(() => api(`/api/sources/${b.dataset.delsrc}`, { method: "DELETE" }), "Entreprise retirée.").then(route));
+  const f = document.getElementById("srcFilter");
+  const af = document.getElementById("asFilter");
+  if (af) af.oninput = () => { const q = af.value.trim().toLowerCase(); $app.querySelectorAll("#asList .srcchip").forEach((a) => { a.hidden = !!q && !a.dataset.name.includes(q); }); };
+  if (f) f.oninput = () => { const q = f.value.trim().toLowerCase(); $app.querySelectorAll(".srcgrid li").forEach((li) => { li.hidden = !!q && !li.dataset.name.includes(q); }); };
 }
 
 // ---------- sites connectés (extension du navigateur) ----------

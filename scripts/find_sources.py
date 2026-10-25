@@ -59,6 +59,9 @@ Nacon, Dontnod, Amplitude, Riot Games, Electronic Arts, Activision, Blizzard, Ki
 # Identifiants qui existent mais ne sont pas l'entreprise visée (vérifiés à la main).
 EXCLUDE = {("smartrecruiters", "free2"), ("ashby", "vinci"), ("greenhouse", "sezzle"), ("smartrecruiters", "dataiku")}
 ALIASES = {"Backmarket": "Back Market"}
+# Entreprises disparues, rachetées ou doublons : retirées de la liste « assistée ».
+GONE = {"Quonto", "Station F", "Captain Train", "Chauffeur Privé", "Lunchr", "Cajoo", "Luko", "Gorillas", "Getir", "Frichti",
+        "Sendinblue", "Sezzle", "Kard", "Side", "Focus", "King", "Tier", "Bolt", "Dott", "Backmarket"}
 
 
 def slugs(name: str) -> list:
@@ -98,7 +101,7 @@ def main():
     sources = sorted(best.values(), key=lambda r: (-r["early"], -r["france"]))
     readable = {r["company"] for r in sources}
     out = {"verified_at": date.today().isoformat(), "sources": sources,
-           "assisted": sorted(n for n in names if n not in readable)}
+           "assisted": sorted((n for n in names if n not in readable and n not in GONE), key=str.lower)}
     (ROOT / "app" / "sources_catalog.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"{len(sources)} sources lisibles ({sum(r['france'] for r in sources)} offres en France, "
           f"{sum(r['early'] for r in sources)} stages/alternances/VIE) ; {len(out['assisted'])} entreprises en mode assisté")

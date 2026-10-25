@@ -6,6 +6,7 @@ puis ouvrir http://127.0.0.1:8000
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -88,7 +89,12 @@ def privacy():
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC / "index.html")
+    # Version des fichiers dans leur adresse : après une mise à jour, le navigateur charge les nouveaux (pas l'ancien cache).
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "app.css"):
+        v = hashlib.sha1((STATIC / name).read_bytes()).hexdigest()[:10]
+        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={v}\"")
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 # ===================== Authentification (F01) =====================
