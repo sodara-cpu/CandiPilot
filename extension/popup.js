@@ -1,7 +1,8 @@
 const NAMES = { jobteaser: "JobTeaser", linkedin: "LinkedIn", wttj: "Welcome to the Jungle" };
 const LOGIN = { jobteaser: "https://www.jobteaser.com/fr/users/sign_in", linkedin: "https://www.linkedin.com/login",
   wttj: "https://www.welcometothejungle.com/fr/signin" };
-const PLATFORMS = { greenhouse: "Greenhouse", lever: "Lever" };
+const PLATFORMS = { greenhouse: "Greenhouse", lever: "Lever", workday: "Workday", smartrecruiters: "SmartRecruiters",
+  workable: "Workable", ashby: "Ashby", teamtailor: "Teamtailor", wttj: "Welcome to the Jungle" };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const send = (msg) => chrome.runtime.sendMessage(msg);
@@ -28,8 +29,23 @@ async function draw() {
 }
 
 $("check").onclick = async () => { $("check").disabled = true; $("check").textContent = "Vérification…"; drawSites((await send({ type: "check" })).sites); $("check").textContent = "Vérifier mes connexions"; $("check").disabled = false; };
+// Formulaires intégrés d'autres sites sur la page ouverte (calculé à l'ouverture : la demande d'autorisation
+// doit partir directement du clic).
+let needAccess = [], activeTab = null;
+chrome.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
+  activeTab = tab;
+  needAccess = (await send({ type: "frames", tabId: tab.id }).catch(() => [])) || [];
+  if (needAccess.length) $("fillResult").innerHTML = `<div class="muted">Cette page contient un formulaire de ${esc(needAccess.map((o) => new URL(o).hostname).join(", "))} :
+    Chrome te demandera l'autorisation de le remplir (une seule fois par site).</div>`;
+});
+
 $("fill").onclick = async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (needAccess.length) {
+    const ok = await chrome.permissions.request({ origins: needAccess.map((o) => o + "/*") });
+    if (!ok) $("fillResult").innerHTML = `<div class="muted">Sans autorisation, seuls les champs de la page principale sont remplis.</div>`;
+    needAccess = [];
+  }
+  const tab = activeTab || (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   $("fill").disabled = true;
   const r = await send({ type: "fill", tabId: tab.id });
   $("fill").disabled = false;

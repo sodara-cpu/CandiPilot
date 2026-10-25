@@ -34,6 +34,40 @@ export function fillForm(profile, files) {
       fields: [["input[name=name]", "full_name"], ["input[name=email]", "email"], ["input[name=phone]", "phone"],
         ["input[name=location]", "city"], ["input[name='urls[LinkedIn]']", "linkedin"], ["input[type=file][name=resume]", "cv"]],
     },
+    workday: {
+      match: () => /myworkday(jobs|site)\.com$/.test(location.hostname) || !!document.querySelector("[data-automation-id^='legalNameSection']"),
+      fields: [["[data-automation-id='legalNameSection_firstName']", "first_name"], ["[data-automation-id='legalNameSection_lastName']", "last_name"],
+        ["[data-automation-id='email']", "email"], ["[data-automation-id='phone-number']", "phone"],
+        ["[data-automation-id='addressSection_city']", "city"], ["[data-automation-id='linkedinQuestion']", "linkedin"],
+        ["input[type=file][data-automation-id='file-upload-input-ref']", "cv"]],
+    },
+    smartrecruiters: {
+      match: () => /smartrecruiters\.com$/.test(location.hostname) || !!document.querySelector("#first-name-input"),
+      fields: [["#first-name-input", "first_name"], ["#last-name-input", "last_name"], ["#email-input, #confirm-email-input", "email"],
+        ["#phone-number-input", "phone"], ["#linkedin-input", "linkedin"], ["#location-input, #city-input", "city"]],
+    },
+    workable: {
+      match: () => /workable\.com$/.test(location.hostname) || !!document.querySelector("form[data-ui='application-form']"),
+      fields: [["input[name=firstname]", "first_name"], ["input[name=lastname]", "last_name"], ["input[name=email]", "email"],
+        ["input[name=phone]", "phone"], ["input[name=address]", "city"], ["[data-ui='resume'] input[type=file], input[type=file][name=resume]", "cv"]],
+    },
+    ashby: {
+      match: () => /ashbyhq\.com$/.test(location.hostname) || !!document.querySelector("[name='_systemfield_name']"),
+      fields: [["[name='_systemfield_name']", "full_name"], ["[name='_systemfield_email']", "email"], ["[name='_systemfield_phone']", "phone"],
+        ["[name='_systemfield_location']", "city"], ["input[type=file][name='_systemfield_resume'], #_systemfield_resume", "cv"]],
+    },
+    teamtailor: {
+      match: () => /teamtailor\.com$/.test(location.hostname) || !!document.querySelector("[name='candidate[first_name]']"),
+      fields: [["[name='candidate[first_name]']", "first_name"], ["[name='candidate[last_name]']", "last_name"],
+        ["[name='candidate[email]']", "email"], ["[name='candidate[phone]']", "phone"], ["[name='candidate[linkedin_url]']", "linkedin"],
+        ["input[type=file][name='candidate[resume]']", "cv"], ["input[type=file][name*='cover_letter']", "cover_file"]],
+    },
+    wttj: {        // formulaire propre à Welcome to the Jungle (sinon, il renvoie vers celui de l'entreprise)
+      match: () => /welcometothejungle\.com$/.test(location.hostname),
+      fields: [["input[name=firstname], input[name=first_name]", "first_name"], ["input[name=lastname], input[name=last_name]", "last_name"],
+        ["input[name=email]", "email"], ["input[name=phone]", "phone"], ["input[type=file][name=resume], input[type=file][name=cv]", "cv"],
+        ["input[type=file][name=cover_letter]", "cover_file"]],
+    },
   };
   const COVER_FILE = /(cover|motivation|lettre)/;
   const NEXT = /^(suivant|continuer|next|continue|étape suivante|save and continue)\b/i;
@@ -57,7 +91,8 @@ export function fillForm(profile, files) {
   };
   const adapter = Object.entries(ADAPTERS).find(([, a]) => a.match());
   const known = new Map();       // champ → rôle sûr (adaptateur)
-  if (adapter) for (const [sel, r] of adapter[1].fields) document.querySelectorAll(sel).forEach((el) => known.set(el, r));
+  const roots = (root, out = [root]) => { root.querySelectorAll("*").forEach((el) => { if (el.shadowRoot) roots(el.shadowRoot, out); }); return out; };
+  if (adapter) for (const root of roots(document)) for (const [sel, r] of adapter[1].fields) root.querySelectorAll(sel).forEach((el) => known.set(el, r));
 
   // Rôle du champ et confiance (0 à 1).
   const guess = (el) => {

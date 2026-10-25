@@ -186,6 +186,28 @@ try:
         check(res["platform"] == "greenhouse" and fr.frame_locator("#gh").locator("#first_name").input_value() == "Alex",
               "formulaire intégré dans un cadre (iframe) rempli")
 
+        # Autres plateformes courantes : chacune reconnue par son balisage propre.
+        for name, first, phone, cv in (("workday", "[data-automation-id=legalNameSection_firstName]", "[data-automation-id=phone-number]", "[data-automation-id=file-upload-input-ref]"),
+                                       ("workable", "input[name=firstname]", "input[name=phone]", "[data-ui=resume] input"),
+                                       ("teamtailor", "input[name='candidate[first_name]']", "input[name='candidate[phone]']", "input[name='candidate[resume]']")):
+            pg, res = fill_page(f"/fake-ats/apply/{name}")
+            check(res["platform"] == name and pg.eval_on_selector(first, "e => e.value") == "Alex" and pg.eval_on_selector(phone, "e => e.value") == "+33600000000"
+                  and pg.eval_on_selector(cv, "e => e.files.length") == 1 and not pg.evaluate("window.submitted === true"),
+                  f"{name} reconnu : identité, téléphone, CV ; rien n'est envoyé")
+        pg, res = fill_page("/fake-ats/apply/ashby")
+        check(res["platform"] == "ashby" and pg.eval_on_selector("[name=_systemfield_name]", "e => e.value") == "Alex Martin",
+              "Ashby reconnu : nom complet")
+        pg, res = fill_page("/fake-ats/apply/smartrecruiters")
+        check(pg.evaluate("document.getElementById('sr').shadowRoot.getElementById('phone-number-input').value") == "+33600000000",
+              "SmartRecruiters : champs dans ses composants (shadow DOM) remplis")
+
+        # Formulaire intégré depuis un site non autorisé : repéré pour demander l'accès (une fois par site).
+        other = ctx.new_page()
+        other.goto(BASE + "/fake-form/autre-site")
+        tid = sw.evaluate("chrome.tabs.query({url: '*://127.0.0.1/fake-form/autre-site*'}).then(t => t[0].id)")
+        check(sw.evaluate(f"framesNeedingAccess({tid})") == ["https://apply.example.org"], "site non autorisé repéré : l'accès sera demandé au candidat")
+        check(sw.evaluate(f"framesNeedingAccess({tab_id})") == [], "aucune demande d'accès inutile")
+
         # 6. Sécurité du jeton.
         bad = urllib.request.Request(BASE + "/api/agent/next", headers={"Authorization": "Bearer faux"})
         try:

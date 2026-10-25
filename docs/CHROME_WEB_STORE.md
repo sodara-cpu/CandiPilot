@@ -7,7 +7,7 @@ développeur. Seul le propriétaire du projet peut le faire (compte Google + 5 $
 
 | Élément | Où |
 |---|---|
-| Paquet à envoyer | `dist/candipilot-extension-0.2.0.zip` (régénérer : `.venv/bin/python scripts/build_extension_store.py`) |
+| Paquet à envoyer | `dist/candipilot-extension-0.3.0.zip` (régénérer : `.venv/bin/python scripts/build_extension_store.py`) |
 | Captures 1280×800 | `dist/store/1_accueil.png`, `2_offres.png`, `3_envoi.png`, `4_extension.png` |
 | Icône 128×128 | `extension/icon128.png` |
 | Politique de confidentialité | `https://candipilot.onrender.com/confidentialite` (en ligne après la prochaine mise en production) |
@@ -21,7 +21,7 @@ souvent intégrés dans un cadre sur le site de l'entreprise. Le remplissage des
 
 1. **Compte développeur** : https://chrome.google.com/webstore/devconsole → se connecter avec le compte
    Google du projet → accepter le contrat → payer les **5 $** d'inscription.
-2. **Nouvel élément** → importer `dist/candipilot-extension-0.2.0.zip`.
+2. **Nouvel élément** → importer `dist/candipilot-extension-0.3.0.zip`.
 3. **Fiche du Store** : copier les textes ci-dessous, ajouter l'icône et les 4 captures.
 4. **Confidentialité** : remplir avec les réponses ci-dessous.
 5. **Distribution** : « Non répertoriée » pour commencer (installable avec le lien, invisible dans la
@@ -69,6 +69,7 @@ Aider l'utilisateur à chercher des offres d'emploi et à préparer ou remplir s
 | `cookies` | Savoir si l'utilisateur est connecté à JobTeaser et trouver le portail de son école. Les cookies ne sont jamais transmis. |
 | `activeTab` | Remplir le formulaire de l'onglet ouvert quand l'utilisateur clique sur « Remplir ce formulaire ». |
 | Accès aux sites (JobTeaser, LinkedIn, Welcome to the Jungle, CandiPilot) | Rechercher des offres et postuler sur ces sites ; se relier au compte CandiPilot de l'utilisateur. |
+| Accès facultatif aux autres sites (`optional_host_permissions`) | Demandé à l'utilisateur, site par site et seulement au clic sur « Remplir ce formulaire », quand la page contient un formulaire intégré d'une autre plateforme (Workday, SmartRecruiters…). Jamais demandé à l'installation. |
 | Accès à Greenhouse et Lever | Remplir, à la demande de l'utilisateur, les formulaires de candidature de ces plateformes, souvent intégrés dans un cadre sur le site de l'entreprise. Rien n'est envoyé : l'utilisateur relit et envoie lui-même. |
 
 **Code distant** : Non, aucun code n'est chargé à distance.

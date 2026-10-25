@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 router = APIRouter(include_in_schema=False)
@@ -192,6 +192,38 @@ def fake_apply_lever():
         <div class="application-question"><div class="application-label">Current company</div><input type="text" name="org"></div>
         <div class="application-question"><div class="application-label">LinkedIn URL</div><input type="text" name="urls[LinkedIn]"></div>
         """ + _SUBMIT)
+
+
+# Balisage reconnu par les adaptateurs de l'extension (attributs propres à chaque plateforme).
+_ATS_FORMS = {
+    "workday": """<label>Given Name</label><input data-automation-id="legalNameSection_firstName">
+        <label>Family Name</label><input data-automation-id="legalNameSection_lastName">
+        <label>Email Address</label><input data-automation-id="email"><label>Phone Number</label><input data-automation-id="phone-number">
+        <input type="file" data-automation-id="file-upload-input-ref" style="display:none">""",
+    "smartrecruiters": """<sr-form id="sr"></sr-form><script>customElements.define("sr-form", class extends HTMLElement {
+        constructor() { super(); this.attachShadow({mode: "open"}).innerHTML = '<input id="first-name-input"><input id="last-name-input">' +
+          '<input id="email-input"><input id="phone-number-input">'; } });</script>""",
+    "workable": """<input name="firstname"><input name="lastname"><input name="email"><input name="phone">
+        <div data-ui="resume"><input type="file"></div>""",
+    "ashby": """<input name="_systemfield_name"><input name="_systemfield_email"><input type="file" name="_systemfield_resume">""",
+    "teamtailor": """<input name="candidate[first_name]"><input name="candidate[last_name]"><input name="candidate[email]">
+        <input name="candidate[phone]"><input type="file" name="candidate[resume]">""",
+}
+
+
+@router.get("/fake-ats/apply/{platform}")
+def fake_apply_ats(platform: str):
+    if platform not in _ATS_FORMS:
+        raise HTTPException(404)
+    marker = ' data-ui="application-form"' if platform == "workable" else ""
+    return _page(f"Apply ({platform})", f"""<form id="f"{marker} onsubmit="window.submitted = true; return false;">
+        {_ATS_FORMS[platform]}<button type="submit">Submit</button></form>""")
+
+
+@router.get("/fake-form/autre-site")
+def fake_form_other_site():
+    """Formulaire intégré depuis un site auquel l'extension n'a pas encore accès : l'autorisation sera demandée."""
+    return _page("Carrières — Exemple", """<iframe src="https://apply.example.org/job/1" style="width:600px;height:200px"></iframe>""")
 
 
 @router.get("/fake-form/etapes")

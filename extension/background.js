@@ -205,6 +205,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       ...(await chrome.storage.local.get(["lastPoll", "lastError", "sites"])), version: VERSION });
     if (msg.type === "check") { await refreshSites(); return reply(await chrome.storage.local.get("sites")); }
     if (msg.type === "fill") return reply(await fillTab(msg.tabId));
+    if (msg.type === "frames") return reply(await framesNeedingAccess(msg.tabId));
     reply(null);
   })().catch((e) => reply({ error: String(e.message || e) }));
   return true;
@@ -237,6 +238,20 @@ async function fillTabNow(tabId) {
   return out;
 }
 self.fillTab = fillTab;          // accessible aux tests
+
+// Formulaires intégrés (cadres) d'autres sites auxquels l'extension n'a pas encore accès (Workday, SmartRecruiters…).
+// La fenêtre de l'extension demande alors l'autorisation à l'utilisateur, une fois par site, au clic sur « Remplir ».
+async function framesNeedingAccess(tabId) {
+  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: () =>
+    [...document.querySelectorAll("iframe[src]")].map((f) => { try { return new URL(f.src, location.href).origin; } catch { return ""; } })
+      .filter((o) => o.startsWith("https://") && o !== location.origin) });
+  const out = [];
+  for (const origin of new Set(res ? res.result : [])) {
+    if (!(await chrome.permissions.contains({ origins: [origin + "/*"] }))) out.push(origin);
+  }
+  return out;
+}
+self.framesNeedingAccess = framesNeedingAccess;
 
 chrome.alarms.create("poll", { periodInMinutes: 0.5 });
 chrome.alarms.create("sites", { periodInMinutes: 360 });
