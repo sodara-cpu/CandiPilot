@@ -111,13 +111,14 @@ try:
     check(sum(t.startswith("Finance Intern") for t in titles) == 1, f"doublon Greenhouse / Lever fusionné : {titles}")
     check({"Corporate Finance Intern", "Stage Analyste Financier", "Finance Operations Intern", "Stage Contrôle de gestion"} <= set(titles),
           "offres des 5 autres sources gardées")
-    ft = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "francetravail"}
+    by_src = lambda name: until(lambda: {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == name}, 30) or {}
+    ft = by_src("francetravail")
     check("Alternance - Assistant contrôle de gestion (H/F)" in ft and ft["Alternance - Assistant contrôle de gestion (H/F)"]["url"].startswith("https://candidat.francetravail.fr"),
           f"offres France Travail (API officielle) ajoutées, avec le lien d'origine : {sorted(ft)}")
-    az = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "adzuna"}
+    az = by_src("adzuna")
     check(set(az) == {"Stage Analyste Financier M&A"} and az["Stage Analyste Financier M&A"]["url"].startswith("https://www.adzuna.fr"),
           f"offres Adzuna ajoutées (balises HTML retirées, offre hors profil écartée) : {sorted(az)}")
-    sm = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "sitemap"}
+    sm = until(lambda: (lambda d: d if len(d) >= 2 else None)({o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "sitemap"}), 30) or {}
     check(set(sm) == {"Stage Analyste Crédit", "Stage Contrôle de gestion"} and sm["Stage Analyste Crédit"]["entreprise"] == "Maison Y",
           "offres du site carrières : page interdite par robots.txt jamais lue, offre à Madrid écartée, nom propre de l'entreprise")
     ats = [o for o in offers if o["source"] in ("greenhouse", "lever", "ashby", "smartrecruiters", "workable", "jsonld")]
