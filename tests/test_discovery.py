@@ -23,7 +23,8 @@ BASE = f"http://127.0.0.1:{PORT}"
 sys.argv = [sys.argv[0], BASE]
 import test_api  # noqa: E402
 from test_api import Client  # noqa: E402
-from app.discovery import contract_of, detect_source, fingerprint  # noqa: E402
+from app.discovery import contract_of, detect_source, fingerprint, in_zone  # noqa: E402
+from app.matching import score  # noqa: E402
 
 passed = 0
 
@@ -59,6 +60,14 @@ check(contract_of({"title": "Internal Control Specialist", "contract": ""}) != "
 check(contract_of({"title": "Finance Intern", "contract": ""}) == "stage", "« Intern » est un stage")
 check(fingerprint("Acme", "Finance Intern (H/F)", "Paris, France") == fingerprint("ACME", "Finance intern", "Paris"),
       "même offre sur deux plateformes = même empreinte")
+
+check(in_zone("Rennes, FR", ["France"]) and in_zone("Levallois-Perret, FR", ["Paris"]) and in_zone("London, UK", ["londres"])
+      and not in_zone("Barcelona", ["France"]) and not in_zone("Frankfurt, DE", ["France"]), "zones : codes pays, Île-de-France, Londres")
+fin = {"metiers": ["corporate finance", "M&A"], "contrats": ["stage"], "zones": ["France"]}
+o = lambda t: {"poste": t, "localisation": "Paris, FR", "contrat": "stage"}
+check(score(o("Stagiaire Modélisation financière"), fin, {}) > score(o("Stage Talent Acquisition"), fin, {}),
+      "« financière » proche de « finance » ; « Talent Acquisition » n'est pas du M&A")
+check(score(o("Stage Fusions & Acquisitions"), fin, {}) > score(o("Growth Marketing Intern"), fin, {}), "« Fusions » = M&A ; le marketing n'est pas de la finance")
 
 # 2. Serveur avec de fausses API de plateformes
 env = {**{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "ANTHROPIC_API_KEY")}, "CANDIPILOT_FAKE_ROBOT": "1",

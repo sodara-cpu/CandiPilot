@@ -26,7 +26,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: CANDIPILOT_LLM_DAILY_OFFERS
-        value: "150"
+        value: "400"
       # E-mails « mot de passe oublié » : clé API Brevo (recommandé), sinon SMTP.
       - key: CANDIPILOT_BREVO_API_KEY
         sync: false

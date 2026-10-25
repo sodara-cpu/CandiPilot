@@ -407,7 +407,7 @@ def run_discover(job: dict) -> None:
                 contract = discovery.contract_of(j)
                 if wanted and not any(w in contract or w in j["contract"].lower() for w in wanted):
                     continue
-                if zones and not any(z in j["location"].lower() for z in zones) and not (j["remote"] and "télétravail" in zones):
+                if zones and not discovery.in_zone(j["location"], zones, j["remote"]):
                     continue
                 offer = {"poste": j["title"], "entreprise": j["company"], "localisation": j["location"], "contrat": contract,
                          "domaine": "", "start_date": "", "apply_type": "external"}
@@ -483,6 +483,8 @@ def run_rank(job: dict) -> None:
     if rated:
         with db.tx() as c:
             db.add_event(c, uid, "info", f"{rated} offre(s) relue(s) par l'IA : note et explication mises à jour.")
+            if rated == len(offers) == limit and llm.budget_left(c, uid) > 0:
+                enqueue(c, uid, "rank")        # il en reste : on continue (dans la limite du plafond quotidien)
 
 
 HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify, "discover": run_discover,

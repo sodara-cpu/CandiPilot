@@ -17,6 +17,29 @@ STOP = {"de", "du", "des", "la", "le", "les", "et", "en", "a", "au", "aux", "d",
         "stage", "stagiaire", "intern", "internship", "h", "f", "x", "analyste", "analyst", "junior"}
 
 
+# Équivalences fréquentes entre français et anglais dans les intitulés.
+SYNONYMS = {"m&a": {"fusions", "fusion", "m&a"}, "audit": {"audit", "auditeur", "auditor", "auditrice"},
+            "risk": {"risk", "risque", "risques", "risks"}, "markets": {"markets", "marches"},
+            "credit": {"credit", "credits", "lending", "financement"}, "debt": {"debt", "dette"},
+            "equity": {"equity", "capital"}, "control": {"control", "controle", "controlling", "controller"},
+            "gestion": {"gestion", "management"}, "comptabilite": {"comptabilite", "accounting", "accountant", "comptable"}}
+
+
+def _same(a: str, b: str) -> bool:
+    """Même mot, même racine (finance / financière / financial) ou synonyme français-anglais."""
+    if a == b:
+        return True
+    if a.startswith("market") or b.startswith("market"):   # « markets » (finance de marché) ≠ marketing, marketplace, market
+        return False
+    if len(a) >= 6 and len(b) >= 6 and a[:6] == b[:6]:
+        return True
+    return any(a in group and b in group for group in SYNONYMS.values())
+
+
+def _overlap(want: set, have: set) -> int:
+    return sum(1 for w in want if any(_same(w, h) for h in have))
+
+
 def _tokens(text: str) -> set:
     t = unicodedata.normalize("NFKD", (text or "").lower())
     t = "".join(ch for ch in t if not unicodedata.combining(ch))
@@ -33,20 +56,21 @@ def score(offer: dict, prefs: dict, profile: dict) -> int:
     for kw in metiers:
         kt = _tokens(kw)
         if kt:
-            best = max(best, len(kt & title_tokens) / len(kt))
+            best = max(best, _overlap(kt, title_tokens) / len(kt))
     pts += 45 * best if metiers else 22
 
     comp = _tokens(profile.get("competences", ""))
     if comp:
-        pts += 15 * min(1.0, len(comp & title_tokens) / 2)
+        pts += 15 * min(1.0, _overlap(comp, title_tokens) / 2)
 
     contrats = [c.lower() for c in prefs.get("contrats") or []]
     contrat = (offer.get("contrat") or "").lower()
     pts += 15 if not contrats or not contrat or any(c in contrat for c in contrats) else 0
 
-    zones = [z.lower() for z in prefs.get("zones") or []]
-    loc = (offer.get("localisation") or "").lower()
-    pts += 10 if not zones or not loc or any(z in loc for z in zones) else 0
+    from .discovery import in_zone
+    zones = prefs.get("zones") or []
+    loc = offer.get("localisation") or ""
+    pts += 10 if not zones or not loc or in_zone(loc, zones) else 0
 
     start_from = prefs.get("start_from") or ""
     start = offer.get("start_date") or ""

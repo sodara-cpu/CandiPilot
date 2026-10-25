@@ -179,6 +179,34 @@ def fingerprint(company: str, title: str, location: str) -> str:
     return hashlib.sha1(f"{_norm(company)}|{_norm(title)}|{city}".encode()).hexdigest()[:20]
 
 
+FRANCE = ("france", "paris", "lyon", "lille", "bordeaux", "toulouse", "nantes", "marseille", "nice", "rennes", "montpellier",
+          "strasbourg", "grenoble", "sophia", "antipolis", "la defense", "boulogne", "levallois", "issy", "neuilly", "saint-denis",
+          "courbevoie", "puteaux", "nanterre", "rueil", "massy", "versailles", "aix-en-provence", "ile-de-france")
+IDF = ("paris", "ile-de-france", "la defense", "boulogne", "levallois", "issy", "neuilly", "saint-denis", "courbevoie", "puteaux",
+       "nanterre", "rueil", "massy", "versailles", "montrouge", "clichy", "saint-ouen", "vincennes", "ivry", "saint-cloud")
+ZONE_ALIASES = {"london": ("london", "londres", "londre"), "londres": ("london",), "londre": ("london",),
+                "remote": ("remote", "teletravail", "télétravail"), "teletravail": ("remote",), "télétravail": ("remote",)}
+
+
+def in_zone(location: str, zones: list, remote: bool = False) -> bool:
+    """La ville ou le pays de l'offre correspond-il à une des zones voulues ? (« Rennes, FR » est en France,
+    « Levallois-Perret » est à Paris au sens Île-de-France, « London » = Londres.)"""
+    loc = _norm(location)
+    raw = (location or "").lower()
+    for z in (_norm(x) for x in zones or []):
+        if not z:
+            continue
+        if z in loc or any(a in loc for a in ZONE_ALIASES.get(z, ())):
+            return True
+        if z == "france" and (re.search(r"(^|[ ,(])fr($|[ ,)])", raw) or any(c in loc for c in (_norm(x) for x in FRANCE))):
+            return True
+        if z == "paris" and any(c in loc for c in (_norm(x) for x in IDF)):
+            return True
+        if z in ("teletravail", "remote") and remote:
+            return True
+    return False
+
+
 CONTRACT_WORDS = {"stage": ("intern", "stage", "stagiaire", "internship", "praktikum"),
                   "alternance": ("alternance", "apprenti", "apprentice", "work-study"),
                   "cdi": ("cdi", "full-time", "full time", "permanent", "fulltime"),

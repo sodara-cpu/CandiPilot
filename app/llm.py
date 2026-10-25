@@ -19,7 +19,7 @@ from . import db
 
 MODEL = os.environ.get("CANDIPILOT_LLM_MODEL") or "claude-opus-5-5"
 FAKE = os.environ.get("CANDIPILOT_FAKE_LLM") == "1"
-DAILY_OFFERS = int(os.environ.get("CANDIPILOT_LLM_DAILY_OFFERS") or 150)
+DAILY_OFFERS = int(os.environ.get("CANDIPILOT_LLM_DAILY_OFFERS") or 400)    # ~0,2 centime par offre (mesuré)
 BATCH = 20
 
 INSTRUCTIONS = """Tu es le conseiller carrière de CandiPilot. Pour chaque offre, évalue si elle correspond au candidat :
