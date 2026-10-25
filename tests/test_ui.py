@@ -166,7 +166,7 @@ with sync_playwright() as p:
     page.fill("input[name=email]", EMAIL)
     page.get_by_role("button", name="Recevoir le lien").click()
     expect(page.get_by_role("heading", name="Vérifie ta boîte mail")).to_be_visible()
-    expect(page.get_by_role("status")).to_contain_text("valable 1 heure")
+    expect(page.locator(".sent")).to_contain_text("valable 1 heure")
     shot("8_mot_de_passe_oublie")
     print("✓ mot de passe oublié")
     b.close()
