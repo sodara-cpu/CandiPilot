@@ -6,6 +6,8 @@ Tâches :
 - submit  : envoi automatique ou assisté, puis preuve d'envoi (F07, règle « preuve vérifiable »)
 - verify  : réconciliation d'une candidature « Incertaine » (§3.4)
 - check_sites : vérifier les sites où l'utilisateur est connecté (extension)
+- discover : offres des plateformes de recrutement (serveur, lot 2)
+- rank     : note et explication de chaque nouvelle offre par Claude (serveur, lot 3)
 
 Trois façons d'exécuter (CANDIPILOT_ROBOT) :
 - extension (défaut) : l'extension CandiPilot du navigateur de CHAQUE utilisateur prend ses tâches
@@ -26,7 +28,7 @@ import threading
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from . import db, files, matching, robot
+from . import db, files, llm, matching, robot
 
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
 ROBOT = "simule" if FAKE else (os.environ.get("CANDIPILOT_ROBOT") or "extension")
@@ -47,7 +49,7 @@ def log_event(event: str, **fields) -> None:
 def enqueue(conn, user_id: str, kind: str, application_id: str = "") -> str:
     """Ajoute une tâche, sauf si la même est déjà en file (pas de doublon d'envoi)."""
     # Découverte : une nouvelle passe est permise pendant qu'une autre tourne (sources ajoutées entre-temps).
-    states = "('en_attente')" if kind == "discover" else "('en_attente','en_cours')"
+    states = "('en_attente')" if kind in SERVER_TYPES else "('en_attente','en_cours')"
     dup = conn.execute(f"""SELECT id FROM jobs WHERE user_id=? AND type=? AND application_id=?
                           AND statut IN {states}""", (user_id, kind, application_id)).fetchone()
     if dup:
@@ -127,6 +129,8 @@ def finish_search(job: dict, found: list, stats: dict) -> None:
                                                         ctx["prefs"].get("default_mode") or "auto", db.now(), db.now()))
         c.execute("UPDATE preferences SET last_search_at=? WHERE user_id=?", (db.now(), uid))
         db.add_event(c, uid, "info", f"{len(found)} nouvelles offres analysées, {kept} retenues.")
+        if found and llm.enabled():
+            enqueue(c, uid, "rank")
 
 
 def _letter(c, a: dict, ctx: dict) -> tuple:
@@ -424,10 +428,55 @@ def run_discover(job: dict) -> None:
         log_event("discover_source", user=uid, source=f"{src['platform']}:{src['token']}", published=len(jobs), kept=kept, new=new)
     with db.tx() as c:
         db.add_event(c, uid, "info", f"Découverte : {total_new} nouvelle(s) offre(s) sur {len(sources)} source(s).")
+        if total_new and llm.enabled():
+            enqueue(c, uid, "rank")
 
 
-HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify, "discover": run_discover}
-SERVER_TYPES = ("discover",)          # toujours exécutées par le serveur, même en mode extension
+def run_rank(job: dict) -> None:
+    """Matching intelligent (lot 3) : Claude note et explique les offres pas encore relues, par lots.
+    En cas d'erreur, les notes des critères stricts restent : rien n'est bloqué."""
+    uid = job["user_id"]
+    with db.tx() as c:
+        ctx = robot.load_context(c, uid)
+        limit = min(llm.budget_left(c, uid), llm.BATCH * 3)
+        offers = db.rows(c.execute("""SELECT o.* FROM offers o LEFT JOIN applications a ON a.offer_id=o.id
+                                       WHERE o.user_id=? AND o.matched_at='' AND (o.expired_at='' OR o.expired_at IS NULL)
+                                       AND COALESCE(a.launched, 0)=0 ORDER BY o.score DESC, o.created_at DESC LIMIT ?""",
+                                    (uid, limit))) if limit else []
+    min_score = int(ctx["prefs"].get("min_score") or 50)
+    rated = 0
+    for i in range(0, len(offers), llm.BATCH):
+        batch = offers[i:i + llm.BATCH]
+        try:
+            results, usage = llm.rate(batch, ctx)
+        except Exception as e:
+            log_event("rank_error", user=uid, model=llm.MODEL, error=f"{type(e).__name__}: {e}"[:300])
+            break
+        known = {o["id"]: o for o in batch}
+        with db.tx() as c:
+            llm.record_usage(c, uid, len(batch), usage)
+            for r in results:
+                o = known.get(r.get("id"))
+                if not o:
+                    continue          # identifiant inventé ou modifié : ignoré
+                s = max(0, min(100, int(r["score"])))
+                c.execute("""UPDATE offers SET rule_score=?, score=?, match_reason=?, matched_at=? WHERE id=? AND user_id=?""",
+                          (o["score"], s, str(r.get("reason") or "")[:300], db.now(), o["id"], uid))
+                # Une offre que Claude juge (in)adaptée change de colonne, tant que le candidat n'y a pas touché.
+                col = "qualifiee" if s >= min_score else "decouverte"
+                c.execute("""UPDATE applications SET statut=?, updated_at=? WHERE offer_id=? AND user_id=?
+                             AND statut IN ('qualifiee','decouverte') AND statut<>? AND selected=0 AND launched=0""",
+                          (col, db.now(), o["id"], uid, col))
+                rated += 1
+        log_event("rank_batch", user=uid, model=llm.MODEL, offers=len(batch), **usage)
+    if rated:
+        with db.tx() as c:
+            db.add_event(c, uid, "info", f"{rated} offre(s) relue(s) par l'IA : note et explication mises à jour.")
+
+
+HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify, "discover": run_discover,
+            "rank": run_rank}
+SERVER_TYPES = ("discover", "rank")   # toujours exécutées par le serveur, même en mode extension
 
 
 # ---------- boucles ----------
@@ -436,7 +485,8 @@ def _next_job():
     """Prochaine tâche exécutée sur le serveur (modes simulé et local ; en mode extension, c'est agent.py)."""
     with db.tx() as c:
         if ROBOT == "extension":       # le navigateur de l'utilisateur fait le reste (agent.py)
-            r = c.execute("SELECT * FROM jobs WHERE statut='en_attente' AND type='discover' ORDER BY created_at LIMIT 1").fetchone()
+            r = c.execute(f"""SELECT * FROM jobs WHERE statut='en_attente' AND type IN ({",".join("?" * len(SERVER_TYPES))})
+                             ORDER BY created_at LIMIT 1""", SERVER_TYPES).fetchone()
         else:
             r = c.execute("""SELECT * FROM jobs WHERE statut='en_attente' AND type<>'check_sites'
                              ORDER BY created_at LIMIT 1""").fetchone()

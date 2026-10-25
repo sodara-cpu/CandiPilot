@@ -61,7 +61,8 @@ check(fingerprint("Acme", "Finance Intern (H/F)", "Paris, France") == fingerprin
       "même offre sur deux plateformes = même empreinte")
 
 # 2. Serveur avec de fausses API de plateformes
-env = {**{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL",)}, "CANDIPILOT_FAKE_ROBOT": "1",
+env = {**{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "ANTHROPIC_API_KEY")}, "CANDIPILOT_FAKE_ROBOT": "1",
+       "CANDIPILOT_FAKE_LLM": "1",
        "CANDIPILOT_DATA": tempfile.mkdtemp(), "CANDIPILOT_ATS_BASE": BASE + "/fake-ats"}
 srv = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)], env=env, cwd=str(ROOT),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -99,6 +100,10 @@ try:
           "offres des 5 autres sources gardées")
     ats = [o for o in offers if o["source"] in ("greenhouse", "lever", "ashby", "smartrecruiters", "workable", "jsonld")]
     check(len(ats) == 6 and all(o["apply_type"] == "external" for o in ats), "offres des plateformes marquées « site de l'entreprise »")
+    rated = until(lambda: (lambda o: o if all(x["match_reason"] for x in o) else None)(c.req("GET", "/api/offers")[1]), 30)
+    check(rated and all(x["match_reason"].startswith("(simulation)") and x["rule_score"] >= 0 for x in rated),
+          "chaque offre relue par l'IA : note et explication (Claude simulé)")
+    check(c.req("GET", "/api/offers")[1][0]["score"] == 90, "offres classées par la note de l'IA")
     srcs = {x["platform"]: x for x in c.req("GET", "/api/sources")[1]["sources"]}
     check(srcs["greenhouse"]["last_status"].startswith("ok") and srcs["workable"]["company"] == "Hug Test", "état de chaque source et nom de l'entreprise")
 

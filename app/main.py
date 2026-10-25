@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import agent, auth, db, files, matching, migrations, robot, worker, workflow
+from . import agent, auth, db, files, llm, matching, migrations, robot, worker, workflow
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 5 * 1024 * 1024
@@ -689,6 +689,8 @@ def create_offer(body: OfferIn, user=CurrentUser):
                      VALUES (?,?,?,'qualifiee',?,?,?)""",
                   (db.new_id(), user["id"], oid, "manual" if body.apply_type == "external" else prefs["default_mode"],
                    db.now(), db.now()))
+        if llm.enabled():
+            worker.enqueue(c, user["id"], "rank")
     return {"id": oid, "score": s}
 
 

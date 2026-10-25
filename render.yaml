@@ -22,6 +22,11 @@ services:
       # Page de l'extension sur le Chrome Web Store (une fois publiée) : bouton « Ajouter à Chrome ».
       - key: CANDIPILOT_EXTENSION_URL
         sync: false
+      # Matching expliqué par Claude (lot 3). Sans clé : note des critères stricts seulement.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CANDIPILOT_LLM_DAILY_OFFERS
+        value: "150"
       # E-mails « mot de passe oublié » : clé API Brevo (recommandé), sinon SMTP.
       - key: CANDIPILOT_BREVO_API_KEY
         sync: false

@@ -269,3 +269,8 @@ details.adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mu
 .installone{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .consent{align-items:flex-start;padding:12px 14px;border:1px solid var(--violet);border-radius:14px;background:var(--violet-bg);font-size:14px}
 .timeline{margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink)}
+
+/* Explication de la note par l'IA (lot 3) */
+.why{display:flex;gap:6px;align-items:flex-start;margin-top:4px;font-size:12.5px;line-height:1.4;color:var(--muted)}
+.why svg{flex:none;margin-top:2px;color:var(--violet)}
+.why-lg{font-size:14.5px;margin:0;padding:10px 14px;border-radius:12px;background:var(--violet-bg);color:var(--ink-2)}

@@ -399,6 +399,7 @@ async function applicationView(id) {
         <span class="sub">${esc(a.entreprise)}${a.localisation ? " · " + esc(a.localisation) : ""}${a.start_date ? " · " + esc(monthLabel(a.start_date)) : ""} · ${isJT ? "JobTeaser" : "Site carrière"} · <a href="${esc(a.url)}" target="_blank" rel="noopener">Voir l'offre</a></span></div>
       <span class="badge b-violet" style="font-size:14px;padding:6px 14px">${a.score} % de compatibilité</span>
     </header>
+    ${a.match_reason ? `<p class="why why-lg">${svg("spark", 15, 2)}${esc(a.match_reason)}</p>` : ""}
     ${banner}
     <section class="modes" aria-label="Mode d'envoi">
       ${[["auto", "Automatique", isJT ? "Le robot remplit et envoie, puis vérifie la preuve de réception." : "Indisponible : candidature sur le site de l'entreprise."],
@@ -556,7 +557,9 @@ async function applicationsView() {
 const PAGE_SIZE = 10;
 const OB_FILTERS = [["all", "Toutes"], ["selected", "Sélectionnées"], ["todo", "À sélectionner"], ["easy", "Candidature simplifiée"], ["top", "Score ≥ 70 %"]];
 const OB_SORTS = [["score", "Meilleur score"], ["recent", "Plus récentes"], ["start", "Début le plus proche"], ["company", "Entreprise A → Z"]];
-const scoreBadge = (o) => `<span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}">${o.score} %</span>`;
+const scoreBadge = (o) => `<span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}"${o.match_reason ? ` title="${esc(o.match_reason)}"` : ""}>${o.score} %</span>`;
+// Explication de la note par l'IA (lot 3), sous l'intitulé de l'offre.
+const reasonLine = (o) => o.match_reason ? `<div class="why">${svg("spark", 13, 2)}${esc(o.match_reason)}</div>` : "";
 
 function obState(key) {
   const base = { q: "", f: "all", sort: "score", page: 1 };
@@ -616,7 +619,7 @@ async function offersView() {
   bindOfferBrowser("all", offers, {
     head: "<th>Poste</th><th>Entreprise</th><th>Lieu</th><th>Début</th><th>Match</th><th>Statut</th><th></th>",
     empty: "Aucune offre. Lance une recherche ou ajoute une offre à la main.",
-    row: (o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${esc(o.source)}</div></td>
+    row: (o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${esc(o.source)}</div>${reasonLine(o)}</td>
         <td>${esc(o.entreprise)}</td><td class="sub">${esc(o.localisation)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td>
         <td>${scoreBadge(o)}</td><td>${o.statut ? statusBadge(o.statut) : ""}</td>
         <td style="white-space:nowrap">${selectBtn(o)}${o.application_id ? `<a class="btn btn-quiet btn-sm" href="#/candidature/${o.application_id}">Ouvrir</a>` : ""}<button class="btn btn-quiet btn-sm" data-edit="${o.id}">Modifier</button>
@@ -730,7 +733,7 @@ async function prefsView() {
   bindOfferBrowser("crit", open, {
     head: "<th>Poste</th><th>Entreprise</th><th>Début</th><th>Match</th><th>Préparation</th><th></th>",
     empty: searching ? "Recherche en cours : les offres arrivent dans quelques minutes." : "Aucune offre pour l'instant. Renseigne tes critères puis clique « Rechercher des offres ».",
-    row: (o) => `<tr class="${o.selected ? "selrow" : ""}"><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée JobTeaser" : "Site de l'entreprise"}${o.localisation ? " · " + esc(o.localisation) : ""}</div></td>
+    row: (o) => `<tr class="${o.selected ? "selrow" : ""}"><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée JobTeaser" : "Site de l'entreprise"}${o.localisation ? " · " + esc(o.localisation) : ""}</div>${reasonLine(o)}</td>
           <td>${esc(o.entreprise)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td><td>${scoreBadge(o)}</td>
           <td>${!o.selected ? "" : o.statut === "preparation" ? '<span class="badge b-blue"><span class="spin"></span>En cours</span>' : o.statut === "a_valider" ? '<span class="badge b-green">Prêt</span>' : statusBadge(o.statut)}</td>
           <td style="white-space:nowrap">${selectBtn(o)}</td></tr>`,

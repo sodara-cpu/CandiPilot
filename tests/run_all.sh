@@ -8,6 +8,7 @@ PY=${PY:-.venv/bin/python}
 PORT=${PORT:-8765}
 TMP=$(mktemp -d)
 export CANDIPILOT_FAKE_ROBOT=1 CANDIPILOT_DATA="$TMP/data"
+unset ANTHROPIC_API_KEY      # jamais d'appel payant à Claude pendant les tests (simulation : test_llm, test_discovery)
 
 $PY -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" > "$TMP/server.log" 2>&1 &
 SERVER=$!
@@ -22,6 +23,7 @@ echo "== Parcours";  $PY tests/test_workflow.py "http://127.0.0.1:$PORT" "$TMP/s
 echo "== CV";        $PY tests/test_cv.py "http://127.0.0.1:$PORT"
 echo "== Fondations"; $PY tests/test_foundations.py "http://127.0.0.1:$PORT"
 echo "== Découverte"; $PY tests/test_discovery.py $((PORT + 40))
+echo "== Matching IA"; $PY tests/test_llm.py
 echo "== Interface"; $PY tests/test_ui.py "http://127.0.0.1:$PORT" "$TMP/ui"
 echo "== Extension"; $PY tests/test_extension.py $((PORT + 30))
 echo "Tous les tests sont passés."

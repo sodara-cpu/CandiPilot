@@ -90,6 +90,20 @@ ALTER TABLE offers ADD COLUMN remote INTEGER DEFAULT 0;
 ALTER TABLE offers ADD COLUMN last_seen_at TEXT DEFAULT '';
 ALTER TABLE offers ADD COLUMN expired_at TEXT DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_offers_fp ON offers(user_id, fingerprint)""", None),
+    (5, "Matching expliqué par Claude, consommation de l'API", """
+ALTER TABLE offers ADD COLUMN rule_score INTEGER DEFAULT -1;
+ALTER TABLE offers ADD COLUMN match_reason TEXT DEFAULT '';
+ALTER TABLE offers ADD COLUMN matched_at TEXT DEFAULT '';
+CREATE TABLE IF NOT EXISTS llm_usage (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  calls INTEGER DEFAULT 0,
+  offers INTEGER DEFAULT 0,
+  input_tokens INTEGER DEFAULT 0,
+  output_tokens INTEGER DEFAULT 0,
+  cache_read_tokens INTEGER DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+)""", None),
 ]
 
 # Entreprises proposées à l'ajout (identifiants vérifiés sur les API publiques).

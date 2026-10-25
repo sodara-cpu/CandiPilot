@@ -126,7 +126,7 @@ def blockers(c, a: dict, uid: str, pr: dict, missing_prof=None) -> tuple:
 
 
 APP_SQL = """SELECT a.*, o.url, o.poste, o.entreprise, o.localisation, o.contrat, o.start_date, o.apply_type, o.score,
-             o.expired_at FROM applications a JOIN offers o ON o.id=a.offer_id"""
+             o.expired_at, o.match_reason FROM applications a JOIN offers o ON o.id=a.offer_id"""
 
 
 def pending(c, uid: str) -> list:
