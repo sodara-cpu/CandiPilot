@@ -7,7 +7,7 @@ développeur. Seul le propriétaire du projet peut le faire (compte Google + 5 $
 
 | Élément | Où |
 |---|---|
-| Paquet à envoyer | `dist/candipilot-extension-0.5.1.zip` (régénérer : `.venv/bin/python scripts/build_extension_store.py`) |
+| Paquet à envoyer | `dist/candipilot-extension-0.5.2.zip` (régénérer : `.venv/bin/python scripts/build_extension_store.py`) |
 | Captures 1280×800 | `dist/store/1_accueil.png`, `2_offres.png`, `3_envoi.png`, `4_extension.png` |
 | Icône 128×128 | `extension/icon128.png` |
 | Politique de confidentialité | `https://candipilot.onrender.com/confidentialite` (en ligne après la prochaine mise en production) |
@@ -21,7 +21,7 @@ souvent intégrés dans un cadre sur le site de l'entreprise. Le remplissage des
 
 1. **Compte développeur** : https://chrome.google.com/webstore/devconsole → se connecter avec le compte
    Google du projet → accepter le contrat → payer les **5 $** d'inscription.
-2. **Nouvel élément** → importer `dist/candipilot-extension-0.5.1.zip`.
+2. **Nouvel élément** → importer `dist/candipilot-extension-0.5.2.zip`.
 3. **Fiche du Store** : copier les textes ci-dessous, ajouter l'icône et les 4 captures.
 4. **Confidentialité** : remplir avec les réponses ci-dessous.
 5. **Distribution** : « Non répertoriée » pour commencer (installable avec le lien, invisible dans la

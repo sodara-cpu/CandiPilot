@@ -98,7 +98,13 @@ export function fillForm(profile, files) {
   const guess = (el) => {
     if (known.has(el)) return [known.get(el), 1];
     const { strong, weak } = labelOf(el), s = strong.toLowerCase(), w = weak.toLowerCase();
-    if (el.type === "file") return [COVER_FILE.test(s + " " + w) ? "cover_file" : "cv", strong ? 0.9 : 0.75];
+    if (el.type === "file") {
+      // Zone « remplir automatiquement depuis le CV » du site (Ashby, Workday…) : jamais utilisée, elle réécrit le
+      // formulaire par-dessus ce que CandiPilot vient de remplir. Le CV va dans le vrai champ « CV / Resume ».
+      const around = clean((el.closest("section, fieldset, [class*=autofill], [class*=Autofill], div") || {}).innerText || "");
+      if (/autofill|auto-fill|remplissage automatique|remplir automatiquement|pré-?remplir|parse/i.test(s + " " + w + " " + around)) return ["skip", 1];
+      return [COVER_FILE.test(s + " " + w) ? "cover_file" : "cv", strong ? 0.9 : 0.75];
+    }
     if (el.type === "checkbox" || el.type === "radio") return ["choice", 1];
     const ac = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/).pop();
     if (AUTOCOMPLETE[ac]) return [AUTOCOMPLETE[ac], 0.95];
@@ -178,6 +184,7 @@ export function fillForm(profile, files) {
   const fillOne = (el) => {
     const [r, conf] = guess(el), { strong, weak } = labelOf(el), label = (strong || weak).split(" | ")[0] || r;
     const done = (how, name) => { mark(el, how); (how === "ok" ? report.filled : report.check).push(name || label); };
+    if (r === "skip") return;
     if (el.tagName !== "SELECT" && !["file", "checkbox", "radio"].includes(el.type) && el.value) return done("ok");
     if (r === "choice") { mark(el, "todo"); describe(el, label); return report.todo.push(label + " (à cocher par toi)"); }
     if (conf < MAYBE) { mark(el, "todo"); describe(el, strong || weak); return report.todo.push(label); }
