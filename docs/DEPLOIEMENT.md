@@ -57,7 +57,12 @@ liaison `link.js`, fenêtre `popup.*`) ; côté serveur `app/agent.py`.
 | Base | PostgreSQL Neon | SQLite `data-recette/` | SQLite `data/` |
 | Robot | extension des utilisateurs | simulé | extension, ou `CANDIPILOT_ROBOT=local` |
 
-**Production : https://candipilot.onrender.com** (Render, région Francfort ; base Neon).
+**Production : https://candipilot.onrender.com** (Render, Francfort ; base Neon, Francfort `eu-central-1`).
+La base doit être dans la même région que le site : avec une base aux États-Unis, chaque requête traversait
+l'Atlantique (page d'accueil 8 s → 0,2 s après le passage en Europe, 25 octobre 2026).
+
+**Mettre à jour la production** : `./release.sh` (tests → version locale → GitHub → déploiement Render par son API,
+`RENDER_API_KEY` dans `.env`). Le déclenchement automatique de Render depuis GitHub ne fonctionne pas sur ce compte.
 
 ## Mettre en ligne (une fois)
 
