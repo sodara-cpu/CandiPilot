@@ -104,7 +104,14 @@ const LOGO = `<span class="logo"><svg width="20" height="20" viewBox="0 0 24 24"
 // Le menu suit les cinq étapes du parcours, cochées quand elles sont faites.
 const STEP_NAV = [["#/profil", "profile", "user", "Profil"], ["#/documents", "documents", "doc", "CV et lettre"],
   ["#/criteres", "prefs", "sliders", "Critères et offres"], ["#/mode", "mode", "spark", "Mode de soumission"], ["#/envoi", "send", "check", "Valider l'envoi"]];
+// Page arrivée en retard (l'utilisateur a déjà cliqué ailleurs) : on ne l'affiche pas.
+class StalePage extends Error {}
+const PAGE_OF = { "#/": "home", "#/profil": "profile", "#/documents": "documents", "#/criteres": "prefs", "#/mode": "mode",
+  "#/envoi": "send", "#/a-valider": "send", "#/candidatures": "apps", "#/offres": "offers", "#/compte": "account" };
+const currentPage = () => { const h = (location.hash || "#/").split("?")[0]; return h.startsWith("#/candidature/") ? "send" : PAGE_OF[h] || "home"; };
+
 function shell(active, content) {
+  if (active !== currentPage()) throw new StalePage();
   const name = `${ME.first_name || ""} ${ME.last_name ? ME.last_name[0] + "." : ""}`.trim() || ME.email;
   const link = (hash, key, icon, label, extra = "") =>
     `<a href="${hash}" ${active === key ? 'aria-current="page"' : ""}>${svg(icon)}<span class="grow">${label}</span>${extra}</a>`;
@@ -935,7 +942,7 @@ async function route() {
       "#/criteres": prefsView, "#/profil": profileView, "#/documents": documentsView, "#/mode": modeView, "#/compte": accountView };
     await (m ? applicationView(m[1]) : (views[h] || dashboardView)());
     if (!pollMs && (GUIDE.steps.some((s) => s.waiting) || GUIDE.next?.waiting)) schedulePoll(4000);
-  } catch (e) { if (ME) toast(e.message, true); }
+  } catch (e) { if (ME && !(e instanceof StalePage)) toast(e.message, true); }
 }
 
 window.addEventListener("hashchange", route);
