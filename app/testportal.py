@@ -189,7 +189,10 @@ def fake_apply_greenhouse(real: int = 0):
         <label for="question_901">LinkedIn Profile</label><input id="question_901" type="text"><br>
         <label for="question_902">Are you legally authorized to work in France?*</label><input id="question_902" type="text"><br>
         <label><input type="checkbox" id="gdpr"> I consent to the processing of my data</label><br>
-        """ + _SUBMIT)
+        """ + ("""<div class="question"><label for="q_city">Dans quelle ville habitez-vous ?</label><input id="q_city" type="text"></div>
+        <div class="question"><label for="q_degree">Niveau d'études</label><select id="q_degree"><option value="">Choisir</option>
+          <option value="b3">Bac+3</option><option value="b5">Master (Bac+5)</option></select></div>
+        <div class="question"><label for="q_salary">Prétentions salariales</label><input id="q_salary" type="text"></div>""" if real else "") + _SUBMIT)
 
 
 @router.get("/fake-ats/offer/greenhouse")

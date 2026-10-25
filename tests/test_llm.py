@@ -95,6 +95,19 @@ try:
 except RuntimeError:
     check(True, "refus de Claude pour les brouillons : erreur claire, rien d'inventé")
 
+# 3c. Agent de remplissage : champs non compris par l'extension (lot 5)
+fake = FakeClient(payload={"answers": [{"id": 0, "value": "Paris", "ok": True}, {"id": 1, "value": "Doctorat", "ok": True},
+                                       {"id": 2, "value": "45 000 €", "ok": False}]})
+llm._client = fake
+fields = [{"id": 0, "label": "Ville", "type": "text"}, {"id": 1, "label": "Niveau", "type": "select", "options": ["Bac+3", "Master"]},
+          {"id": 2, "label": "Prétentions salariales", "type": "text"}]
+got, _ = llm.map_fields(fields, ctx, offers[0], {"Pourquoi nous ?": "Votre mission."})
+kw = fake.calls[0]
+check(got == [{"id": 0, "value": "Paris", "ok": True}], "agent : choix inventé (hors liste) et réponse refusée ignorés")
+check("salaire" in kw["system"][0]["text"] and "consentements" in kw["system"][0]["text"] and "Votre mission." in kw["messages"][0]["content"],
+      "agent : consignes (salaire, consentements laissés au candidat) et réponses validées transmises")
+check(kw["output_config"]["format"]["schema"] == llm.FIELDS_SCHEMA and kw["fallbacks"] == "default", "agent : sortie validée par schéma, modèle de secours")
+
 # 4. Plafond quotidien par utilisateur
 db.init()
 with db.tx() as c:

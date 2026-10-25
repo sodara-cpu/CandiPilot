@@ -215,3 +215,91 @@ def suggest_answers(labels: list, ctx: dict, offer: dict) -> tuple:
              "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0}
     wanted = set(labels)
     return [a for a in json.loads(text)["answers"] if a.get("label") in wanted], usage
+
+
+# ---------- Agent de remplissage : champs de formulaire que l'extension n'a pas compris ----------
+
+FIELDS_INSTRUCTIONS = """Tu remplis le formulaire de candidature d'un candidat, sur le site d'une entreprise. On te donne les champs
+que le robot n'a pas su identifier : intitulé, type (text, textarea, select, radio) et choix possibles.
+Pour chaque champ, donne la valeur à saisir, en t'appuyant UNIQUEMENT sur le profil, l'offre et les réponses déjà
+validées par le candidat. Règles :
+- select / radio : "value" doit reprendre EXACTEMENT un des choix proposés.
+- text / textarea : réponse courte, dans la langue de l'intitulé ; pour une question de motivation, 2 à 3 phrases sobres.
+- Mets "ok": false et "value": "" si l'information n'est pas dans le profil ou si la question est personnelle ou
+  engageante : salaire ou prétentions, visa / autorisation de travail, handicap, nationalité, casier, santé, origine,
+  consentements, déclarations sur l'honneur, « comment avez-vous connu », recommandation par un salarié.
+- N'invente jamais un diplôme, une expérience, une date, un chiffre ou une langue.
+Réponds pour tous les champs, avec leur identifiant."""
+
+FIELDS_SCHEMA = {
+    "type": "object",
+    "properties": {"answers": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"id": {"type": "integer"}, "value": {"type": "string"}, "ok": {"type": "boolean"}},
+        "required": ["id", "value", "ok"], "additionalProperties": False}}},
+    "required": ["answers"], "additionalProperties": False,
+}
+FIELDS_COST = 3          # une demande compte comme 3 offres dans le plafond quotidien
+
+
+def _fields_text(fields: list) -> str:
+    out = []
+    for f in fields[:40]:
+        opts = f" | choix : {' ; '.join(o[:80] for o in f.get('options') or [])}" if f.get("options") else ""
+        out.append(f"[{f['id']}] ({f.get('type', 'text')}{', obligatoire' if f.get('required') else ''}) {str(f.get('label', ''))[:200]}{opts}")
+    return "\n".join(out)
+
+
+def _fake_fields(fields: list, ctx: dict) -> tuple:
+    """Agent simulé (tests) : ville et niveau d'études tirés du profil, le reste laissé au candidat."""
+    p, out = ctx["profile"], []
+    for f in fields:
+        label, opts = (f.get("label") or "").lower(), f.get("options") or []
+        if any(w in label for w in ("ville", "city", "habitez", "live")) and f.get("type") in ("text", "textarea"):
+            out.append({"id": f["id"], "value": p.get("location") or "Paris", "ok": True})
+        elif opts and any(w in label for w in ("niveau", "degree", "études", "education")):
+            out.append({"id": f["id"], "value": next((o for o in opts if "master" in o.lower() or "bac+5" in o.lower()), opts[-1]), "ok": True})
+        else:
+            out.append({"id": f["id"], "value": "", "ok": False})
+    return out, {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+
+
+def map_fields(fields: list, ctx: dict, offer: dict, answers: dict) -> tuple:
+    """Valeurs proposées pour les champs non compris. Renvoie ([{id, value, ok}], usage)."""
+    if FAKE:
+        return _fake_fields(fields, ctx)
+    p = ctx["profile"]
+    extra = "\n".join(f"- {k} : {v}" for k, v in (("Prénom", p.get("first_name")), ("Nom", p.get("last_name")), ("LinkedIn", p.get("linkedin")),
+                                                   ("Disponibilité", p.get("availability")), ("Durée de stage", p.get("duration"))) if v)
+    saved = "\n".join(f"- {q} : {a}" for q, a in (answers or {}).items() if a)
+    resp = client().beta.messages.create(
+        model=MODEL,
+        max_tokens=16000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        thinking={"type": "adaptive"},
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": FIELDS_SCHEMA}},
+        system=[{"type": "text", "text": FIELDS_INSTRUCTIONS},
+                {"type": "text", "text": profile_text(ctx) + ("\n" + extra if extra else ""), "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": (_offer_text(offer) if offer else "Offre : non précisée") +
+                   (f"\n\nRéponses déjà validées par le candidat :\n{saved}" if saved else "") +
+                   "\n\nChamps à remplir :\n" + _fields_text(fields)}],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("Claude a refusé de remplir ces champs.")
+    if resp.stop_reason == "max_tokens":
+        raise RuntimeError("Réponse de Claude incomplète (limite de longueur).")
+    text = next(b.text for b in resp.content if b.type == "text")
+    u = resp.usage
+    usage = {"input_tokens": u.input_tokens or 0, "output_tokens": u.output_tokens or 0,
+             "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0}
+    by_id = {f["id"]: f for f in fields}
+    out = []
+    for a in json.loads(text)["answers"]:
+        f = by_id.get(a.get("id"))
+        if not f or not a.get("ok") or not a.get("value"):
+            continue
+        if f.get("options") and a["value"] not in f["options"]:      # choix inventé : ignoré
+            continue
+        out.append({"id": a["id"], "value": str(a["value"])[:1500], "ok": True})
+    return out, usage

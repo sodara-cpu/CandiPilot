@@ -137,13 +137,42 @@ export function fillForm(profile, files) {
     && (el.offsetParent !== null || el.type === "file");      // les plateformes cachent souvent le champ du CV derrière un bouton
 
   window.__candipilotSeen = new WeakSet();     // un nouveau clic sur « Remplir » reprend tous les champs
-  const report = { filled: [], check: [], todo: [], total: 0, platform: adapter ? adapter[0] : "", steps: false, watching: false };
+  const report = { filled: [], check: [], todo: [], total: 0, platform: adapter ? adapter[0] : "", steps: false, watching: false, unknown: [] };
+  // Champs non compris : décrits (intitulé, type, choix) pour l'agent IA. Jamais les consentements ni déclarations.
+  const CONSENT = /consent|accept|j'accepte|certif|atteste|déclar|declare|terms|conditions|privacy|confidentialit|rgpd|gdpr|true and complete|exactitude|newsletter|marketing/i;
+  window.__cpUnknown = [];
+  const question = (el) => {
+    const box = el.closest("fieldset, [role=radiogroup], [role=group], [class*=question], [class*=Question], [class*=field], [class*=Field]");
+    const legend = box && (box.querySelector("legend, [class*=label], [class*=Label], label") || box);
+    return clean((legend && (legend.innerText || legend.textContent)) || "").split("\n")[0].slice(0, 200);
+  };
+  const seenGroups = new Set();
+  const describe = (el, label) => {
+    if (el.type === "file" || el.type === "checkbox") return;
+    let d;
+    if (el.type === "radio") {
+      if (!el.name || seenGroups.has(el.name)) return;
+      seenGroups.add(el.name);
+      const radios = [...el.getRootNode().querySelectorAll(`input[type=radio][name="${CSS.escape(el.name)}"]`)];
+      d = { label: question(el) || label, type: "radio", options: radios.map((r) => clean(labelOf(r).strong || r.value)).slice(0, 20), els: radios };
+    } else if (el.tagName === "SELECT") {
+      d = { label, type: "select", options: [...el.options].map((o) => clean(o.text)).filter(Boolean).slice(0, 60), els: [el] };
+    } else {
+      // Intitulé trop pauvre (« Start typing… », « Pick date… ») : la question affichée autour du champ.
+      const poor = label.length <= 3 || /^(start typing|pick|select|choose|choisir|sélectionne|tape|type here|search)/i.test(label);
+      const q = poor ? question(el) : "";
+      d = { label: q && q !== label ? `${q} (${label})` : label, type: el.tagName === "TEXTAREA" ? "textarea" : el.type === "date" ? "date" : "text", options: [], els: [el] };
+    }
+    if (!d.label || CONSENT.test(d.label)) return;
+    const id = window.__cpUnknown.push(d) - 1;
+    report.unknown.push({ id, label: d.label, type: d.type, options: d.options, required: !!el.required || el.getAttribute("aria-required") === "true" });
+  };
   const fillOne = (el) => {
     const [r, conf] = guess(el), { strong, weak } = labelOf(el), label = (strong || weak).split(" | ")[0] || r;
     const done = (how, name) => { mark(el, how); (how === "ok" ? report.filled : report.check).push(name || label); };
     if (el.tagName !== "SELECT" && !["file", "checkbox", "radio"].includes(el.type) && el.value) return done("ok");
-    if (r === "choice") { mark(el, "todo"); return report.todo.push(label + " (à cocher par toi)"); }
-    if (conf < MAYBE) { mark(el, "todo"); return report.todo.push(label); }
+    if (r === "choice") { mark(el, "todo"); describe(el, label); return report.todo.push(label + " (à cocher par toi)"); }
+    if (conf < MAYBE) { mark(el, "todo"); describe(el, strong || weak); return report.todo.push(label); }
     const how = conf >= SURE ? "ok" : "check";
     if (r === "cv" && files.cv) { setFile(el, files.cv); return done(how, "CV"); }
     if (r === "cover_file" && files.letter) { setFile(el, files.letter); return done(how, "lettre de motivation"); }
@@ -155,7 +184,7 @@ export function fillForm(profile, files) {
     // Question du recruteur à laquelle le candidat a déjà répondu dans CandiPilot : réponse reprise (à vérifier).
     const ans = answerFor(strong || weak);
     if (ans && (el.tagName === "TEXTAREA" || el.type === "text" || !el.type)) { setValue(el, ans); return done("check"); }
-    mark(el, "todo"); report.todo.push(label);
+    mark(el, "todo"); describe(el, strong || weak); report.todo.push(label);
   };
   const pass = () => {
     let n = 0;
@@ -179,4 +208,33 @@ export function fillForm(profile, files) {
   }
   report.watching = true;
   return report;
+}
+
+
+// Réponses de l'agent IA aux champs non compris (même cadre que fillForm) : valeur saisie ou choix coché, marqué
+// « à vérifier ». Rien n'est envoyé.
+export function applyFieldAnswers(answers) {
+  const clean = (t) => (t || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const setValue = (el, v) => {
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : el.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true, composed: true })); el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+  };
+  const mark = (el) => { el.style.outline = "3px dashed #6D5EFC"; el.style.outlineOffset = "2px"; };
+  const labelText = (r) => clean((r.id && r.getRootNode().querySelector(`label[for="${CSS.escape(r.id)}"]`)?.innerText) || r.closest("label")?.innerText || r.value);
+  const done = [];
+  for (const a of answers || []) {
+    const d = (window.__cpUnknown || [])[a.id];
+    if (!d || !a.value) continue;
+    const v = clean(a.value);
+    if (d.type === "radio") {
+      const r = d.els.find((x) => labelText(x) === v) || d.els.find((x) => labelText(x).includes(v) || v.includes(labelText(x)));
+      if (r && !r.checked) { r.click(); mark(r.parentElement || r); done.push(d.label); }
+    } else if (d.type === "select") {
+      const el = d.els[0], o = [...el.options].find((x) => clean(x.text) === v) || [...el.options].find((x) => clean(x.text).includes(v));
+      if (o) { setValue(el, o.value); mark(el); done.push(d.label); }
+    } else if (!d.els[0].value) { setValue(d.els[0], a.value); mark(d.els[0]); done.push(d.label); }
+  }
+  return done;
 }

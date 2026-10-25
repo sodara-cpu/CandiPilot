@@ -46,7 +46,7 @@ def until(fn, timeout=60, every=0.5):
 
 tmp = tempfile.mkdtemp()
 env = {**{k: v for k, v in os.environ.items() if k not in ("CANDIPILOT_FAKE_ROBOT", "DATABASE_URL")},
-       "CANDIPILOT_ROBOT": "extension", "CANDIPILOT_DEFAULT_SOURCES": "0", "CANDIPILOT_TEST_PORTAL": "1", "CANDIPILOT_DATA": tmp}
+       "CANDIPILOT_ROBOT": "extension", "CANDIPILOT_FAKE_LLM": "1", "CANDIPILOT_DEFAULT_SOURCES": "0", "CANDIPILOT_TEST_PORTAL": "1", "CANDIPILOT_DATA": tmp}
 server = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)], env=env, cwd=str(ROOT),
                           stdout=open(Path(tmp) / "server.log", "w"), stderr=subprocess.STDOUT)
 
@@ -245,6 +245,11 @@ try:
         in_tab = lambda js: sw.evaluate(f"chrome.scripting.executeScript({{target: {{tabId: {site_tab}}}, func: () => {js}}}).then(r => r[0].result)")
         check(until(lambda: in_tab("document.querySelector('#first_name').value") == "Alex", 20)
               and in_tab("document.querySelector('#resume').files.length") == 1, "formulaire de l'entreprise rempli (identité, CV)")
+        check(until(lambda: in_tab("document.querySelector('#q_city').value") == "Paris", 15)
+              and in_tab("document.querySelector('#q_degree').value") == "b5",
+              "agent IA : questions maison comprises (ville, niveau d'études choisi dans la liste)")
+        check(in_tab("document.querySelector('#q_salary').value") == "" and not in_tab("document.querySelector('#gdpr').checked"),
+              "agent IA : salaire et consentement laissés au candidat")
         check(api.get(BASE + f"/api/applications/{site_app}").json()["statut"] == "soumission", "rien n'est envoyé sans le candidat")
         in_tab("(document.querySelector('#question_902').value = 'Oui', document.querySelector('button[type=submit]').click(), 1)")   # le candidat envoie
         a = until(lambda: (lambda x: x if x["statut"] == "confirmee" else None)(api.get(BASE + f"/api/applications/{site_app}").json()), 30)

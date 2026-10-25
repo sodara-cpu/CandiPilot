@@ -3,7 +3,7 @@
 // 2. Toutes les 30 s, il demande ses tâches au serveur et les exécute dans un onglet « robot ».
 // 3. Il signale sur quels sites l'utilisateur est connecté (JobTeaser, LinkedIn, Welcome to the Jungle).
 import { jtLoggedIn, jtListCards, jtReadStart, jtInspect, jtApply, jtSucceeded, jtAlreadyApplied } from "./jobteaser.js";
-import { fillForm } from "./filler.js";
+import { applyFieldAnswers, fillForm } from "./filler.js";
 
 const VERSION = chrome.runtime.getManifest().version;
 const SITES = {
@@ -266,18 +266,30 @@ function fillTab(tabId) { return exclusive(() => fillTabNow(tabId)); }
 async function fillTabNow(tabId) {
   const profile = await api("/api/agent/profile");
   const files = { cv: await fileB64(profile.cv), letter: await fileB64(profile.letter) };
-  return await fillFrames(tabId, profile, files);
+  const url = (await chrome.tabs.get(tabId)).url || "";
+  return await fillFrames(tabId, profile, files, { url });
 }
 
-async function fillFrames(tabId, profile, files) {
+async function fillFrames(tabId, profile, files, ctx = {}) {
   // Dans chaque cadre de la page : les formulaires Greenhouse ou Lever sont souvent intégrés dans un cadre (iframe).
   const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: fillForm, args: [profile, files] });
-  const out = { filled: [], check: [], todo: [], total: 0, platform: "", steps: false, watching: false };
+  const out = { filled: [], check: [], todo: [], total: 0, platform: "", steps: false, watching: false, ai: [] };
   for (const { result: r } of frames) {
     if (!r) continue;
     for (const k of ["filled", "check", "todo"]) out[k].push(...r[k]);
     out.total += r.total; out.platform ||= r.platform; out.steps ||= r.steps; out.watching ||= r.watching;
   }
+  // Agent IA : les champs non compris (intitulés et choix seulement) sont proposés à Claude, cadre par cadre.
+  for (const { frameId, result: r } of frames) {
+    if (!r || !r.unknown || !r.unknown.length) continue;
+    const res = await api("/api/agent/fields", { method: "POST", body: { fields: r.unknown, job_id: ctx.jobId || "", url: ctx.url || "" } }).catch(() => null);
+    if (!res || !res.answers || !res.answers.length) continue;
+    const [applied] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func: applyFieldAnswers, args: [res.answers] });
+    const names = (applied && applied.result) || [];
+    out.ai.push(...names);
+    out.todo = out.todo.filter((t) => !names.some((n) => t.startsWith(n.slice(0, 30))));
+  }
+  out.check.push(...out.ai.map((n) => n + " (IA)"));
   return out;
 }
 self.fillTab = fillTab;          // accessible aux tests
@@ -299,13 +311,24 @@ function openApplyForm() {
   const visible = (e) => e.offsetParent !== null;
   const fields = [...document.querySelectorAll("input[type=text], input[type=email], input:not([type]), input[type=file], textarea")].filter(visible);
   if (fields.length >= 3) return { form: true };
-  const RE = /^(postuler|je postule|postuler maintenant|candidater|déposer (ma|une) candidature|apply|apply now|apply for this (job|position)|start application|i'?m interested)\b/i;
+  const RE = /^(postuler|je postule|postuler maintenant|candidater|déposer (ma|une) candidature|je suis intéressé|intéressé|apply|apply now|apply for this (job|position)|start application|i'?m interested|candidature)/i;
   const el = [...document.querySelectorAll("a, button, [role=button]")].find((e) => visible(e) && RE.test((e.innerText || e.getAttribute("aria-label") || "").trim()));
   if (!el) return { form: false };
   const href = el.tagName === "A" && el.getAttribute("href");
   if (href && !href.startsWith("#") && !href.startsWith("javascript")) return { href: new URL(href, location.href).href };
   el.click();
   return { clicked: true };
+}
+
+// Champs visibles encore vides (y compris dans les composants) : sert à repérer une nouvelle étape du formulaire.
+function countEmptyFields() {
+  let n = 0;
+  const walk = (root) => root.querySelectorAll("*").forEach((e) => {
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(e.tagName) && e.offsetParent !== null && !["hidden", "submit", "button", "password", "search", "checkbox", "radio"].includes(e.type) && !e.value) n++;
+    if (e.shadowRoot) walk(e.shadowRoot);
+  });
+  walk(document);
+  return n;
 }
 
 // Page de confirmation après l'envoi (preuve) : phrase repérée et adresse de la page.
@@ -338,13 +361,27 @@ async function doApply(job) {
   const target = new URL((await chrome.tabs.get(tab.id)).url || job.url).origin;
   if (!(await chrome.permissions.contains({ origins: [target + "/*"] })))
     return { status: "permission", detail: `Le formulaire est sur ${new URL(target).hostname} : clique sur l'icône CandiPilot puis « Autoriser les sites carrières », et clique « Reprendre l'envoi ».` };
-  const res = await fillFrames(tab.id, profile, files);
+  const res = await fillFrames(tab.id, profile, files, { jobId: job.id });
+  doApply.lastEmpty = (await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: countEmptyFields }).catch(() => []))
+    .reduce((n, f) => n + (f.result || 0), 0);           // référence : seuls de NOUVEAUX champs relancent le remplissage
   await beat(`Formulaire rempli (${res.filled.length + res.check.length} champs) : vérifie, complète l'orange et clique « Envoyer ».`);
-  // Attente de la page de confirmation (20 min), avec signe de vie au serveur.
+  // Attente de la page de confirmation (20 min), avec signe de vie au serveur. Si de nouveaux champs apparaissent
+  // (connexion / création de compte faite par le candidat, étape suivante), ils sont remplis à leur tour.
+  let lastUrl = (await chrome.tabs.get(tab.id)).url;
   for (let i = 0; i < 400; i++) {
     await sleep(3000);
-    if (!(await chrome.tabs.get(tab.id).catch(() => null)))
-      return { status: "uncertain", detail: "Onglet fermé avant la confirmation : si tu as envoyé la candidature, clique « Je l'ai envoyée »." };
+    const t = await chrome.tabs.get(tab.id).catch(() => null);
+    if (!t) return { status: "uncertain", detail: "Onglet fermé avant la confirmation : si tu as envoyé la candidature, clique « Je l'ai envoyée »." };
+    if (i % 3 === 2) {
+      const empty = (await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: countEmptyFields }).catch(() => []))
+        .reduce((n, f) => n + (f.result || 0), 0);
+      if (empty >= 2 && (t.url !== lastUrl || empty > (doApply.lastEmpty || 0))) {
+        lastUrl = t.url;
+        const more = await fillFrames(tab.id, profile, files, { jobId: job.id }).catch(() => null);
+        if (more) await beat(`Nouvelle étape remplie (${more.filled.length + more.check.length} champs) : vérifie puis continue.`);
+      }
+      doApply.lastEmpty = empty;
+    }
     const proof = await run(tab.id, detectConfirmation).catch(() => null);
     if (proof) return { status: "submitted", detail: `Envoyée par toi sur ${host} (formulaire rempli par CandiPilot)`, proof: "Page de confirmation : " + proof.slice(0, 250) };
     if (i % 20 === 19) await beat("En attente de ton clic sur « Envoyer »…");

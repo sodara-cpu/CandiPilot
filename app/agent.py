@@ -200,6 +200,44 @@ def job_progress(job_id: str, body: ProgressIn, user=Agent):
     return {"ok": True}
 
 
+class FieldsIn(BaseModel):
+    fields: list = []
+    job_id: str = ""
+    url: str = ""
+
+
+@router.post("/api/agent/fields")
+def agent_fields(body: FieldsIn, user=Agent):
+    """Agent de remplissage : Claude propose une valeur pour chaque champ que l'extension n'a pas compris (intitulés et
+    choix seulement, jamais le contenu de la page). Rien n'est envoyé : le candidat vérifie (pointillés violets)."""
+    from . import llm
+    fields = [f for f in body.fields if isinstance(f, dict) and isinstance(f.get("id"), int)][:40]
+    if not fields or not llm.enabled():
+        return {"answers": [], "ai": llm.enabled()}
+    with db.tx() as c:
+        if llm.budget_left(c, user["id"]) < llm.FIELDS_COST:
+            return {"answers": [], "ai": True, "detail": "Limite quotidienne de l'IA atteinte."}
+        ctx = robot.load_context(c, user["id"])
+        offer, answers = None, {}
+        job = c.execute("SELECT application_id FROM jobs WHERE id=? AND user_id=?", (body.job_id, user["id"])).fetchone() if body.job_id else None
+        if job and job["application_id"]:
+            a = worker.load_app(c, job["application_id"])
+            if a:
+                offer = db.row(c.execute("SELECT * FROM offers WHERE id=? AND user_id=?", (a["offer_id"], user["id"])).fetchone())
+                answers = {q["label"]: q.get("answer", "") for q in db.jload(a["questions"], [])}
+        elif body.url:
+            offer = db.row(c.execute("SELECT * FROM offers WHERE user_id=? AND url=?", (user["id"], body.url)).fetchone())
+    try:
+        out, usage = llm.map_fields(fields, ctx, offer, answers)
+    except Exception as e:
+        worker.log_event("fields_error", user=user["id"], error=f"{type(e).__name__}: {e}"[:300])
+        return {"answers": [], "ai": True, "detail": "L'IA n'a pas pu répondre."}
+    with db.tx() as c:
+        llm.record_usage(c, user["id"], llm.FIELDS_COST, usage)
+    worker.log_event("fields_mapped", user=user["id"], fields=len(fields), answered=len(out), **usage)
+    return {"answers": out, "ai": True}
+
+
 @router.post("/api/agent/jobs/{job_id}/partial")
 def job_partial(job_id: str, body: PartialIn, user=Agent):
     """Paquet d'offres trouvé en cours de recherche : visible tout de suite, noté par l'IA sans attendre la fin."""
