@@ -22,3 +22,4 @@ apprentissage/donnees/*
 apprentissage/donnees/verifiees/*.html
 apprentissage/modeles/sauvegardes/
 .env
+dist/

@@ -266,3 +266,4 @@ details.adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mu
 .drop input{position:absolute;width:1px;height:1px;opacity:0}
 .upform{position:relative}
 .errcard{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-color:var(--red);background:var(--red-bg)}
+.installone{display:flex;align-items:center;gap:14px;flex-wrap:wrap}

@@ -19,6 +19,9 @@ services:
         value: "1"
       - key: CANDIPILOT_TRUST_PROXY
         value: "1"
+      # Page de l'extension sur le Chrome Web Store (une fois publiée) : bouton « Ajouter à Chrome ».
+      - key: CANDIPILOT_EXTENSION_URL
+        sync: false
       # E-mails « mot de passe oublié » : clé API Brevo (recommandé), sinon SMTP.
       - key: CANDIPILOT_BREVO_API_KEY
         sync: false

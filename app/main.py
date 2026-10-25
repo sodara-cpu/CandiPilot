@@ -65,6 +65,12 @@ def healthz(db_check: int = 0):
     return {"ok": True}
 
 
+@app.get("/confidentialite", include_in_schema=False)
+def privacy():
+    """Politique de confidentialité (publique, exigée par le Chrome Web Store)."""
+    return FileResponse(STATIC / "confidentialite.html")
+
+
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC / "index.html")

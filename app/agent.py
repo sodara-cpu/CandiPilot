@@ -74,7 +74,10 @@ def status(c, uid: str) -> dict:
     p = c.execute("SELECT sites_status, jobteaser_url FROM preferences WHERE user_id=?", (uid,)).fetchone()
     online = bool(t and t["last_seen"] and datetime.fromisoformat(t["last_seen"]) > datetime.now(timezone.utc) - timedelta(seconds=ONLINE_S))
     sites = db.jload(p["sites_status"], {})
+    import os
     return {"robot": worker.ROBOT, "linked": bool(t), "online": online, "last_seen": t["last_seen"] if t else "",
+            # Page de l'extension sur le Chrome Web Store, une fois publiée : installation en un clic.
+            "store_url": os.environ.get("CANDIPILOT_EXTENSION_URL", ""),
             "version": t["version"] if t else "", "portal": p["jobteaser_url"] or robot.DEFAULT_PORTAL,
             "sites": [{"key": k, "name": n, **sites.get(k, {"connected": None})} for k, n in SITES.items()]}
 

@@ -751,12 +751,15 @@ function sitesCard(ag) {
         ${x.connected ? "" : `<a class="btn btn-ghost btn-sm" href="${esc(x.key === "jobteaser" && ag.portal ? ag.portal + "/fr/job-offers" : SITE_LOGIN[x.key])}" target="_blank" rel="noopener">Se connecter</a>`}</li>`).join("")}</ul>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-ghost" id="recheck" ${ag.linked ? "" : "disabled"}>J'ai fini de me connecter : vérifier</button>
         <span class="hint">Connecte-toi normalement sur chaque site, dans un onglet de ce navigateur, puis clique « vérifier ».</span></div>`
-    : `<ol class="install">
+    : ag.store_url ? `<div class="installone">
+        <a class="btn btn-ai" href="${esc(ag.store_url)}" target="_blank" rel="noopener">Ajouter à Chrome — gratuit</a>
+        <span class="hint">1 clic sur « Ajouter à Chrome », puis reviens ici : l'extension se relie toute seule à ton compte.</span></div>`
+    : `<details class="adv"><summary>Installer l'extension (version de test)</summary><ol class="install" style="margin-top:10px">
         <li><a class="btn btn-primary btn-sm" href="/extension.zip">Télécharger l'extension</a> puis double-clique sur le fichier pour le décompresser.</li>
         <li>Dans Chrome, ouvre <code>chrome://extensions</code> et active le <b>Mode développeur</b> (en haut à droite).</li>
         <li>Clique <b>Charger l'extension non empaquetée</b> et choisis le dossier <code>candipilot-extension</code>.</li>
-        <li>Reviens sur cette page : l'extension se relie toute seule à ton compte.</li></ol>
-      <p class="hint" style="margin:0">Bientôt : installation en un clic depuis le Chrome Web Store.</p>`}
+        <li>Reviens sur cette page : l'extension se relie toute seule à ton compte.</li></ol></details>
+      <p class="hint" style="margin:0">L'installation en un clic depuis le Chrome Web Store arrive bientôt.</p>`}
     <details><summary class="hint">Mon école sur JobTeaser</summary>
       <form id="jtPortal" class="row" style="flex-wrap:wrap;margin-top:8px">
         <label class="f" style="flex:1 1 260px">Adresse JobTeaser de ton école (détectée automatiquement)<input type="text" name="portal_url" value="${esc(ag.portal)}" placeholder="https://monecole.jobteaser.com"></label>
