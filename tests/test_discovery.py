@@ -71,7 +71,8 @@ check(score(o("Stage Fusions & Acquisitions"), fin, {}) > score(o("Growth Market
 
 # 2. Serveur avec de fausses API de plateformes
 env = {**{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "ANTHROPIC_API_KEY")}, "CANDIPILOT_FAKE_ROBOT": "1",
-       "CANDIPILOT_FAKE_LLM": "1", "CANDIPILOT_FT_BASE": BASE + "/fake-ft", "FRANCE_TRAVAIL_CLIENT_ID": "PAR_test", "FRANCE_TRAVAIL_CLIENT_SECRET": "secret-test", "CANDIPILOT_DEFAULT_SOURCES": "0",
+       "CANDIPILOT_FAKE_LLM": "1", "CANDIPILOT_FT_BASE": BASE + "/fake-ft", "FRANCE_TRAVAIL_CLIENT_ID": "PAR_test", "FRANCE_TRAVAIL_CLIENT_SECRET": "secret-test",
+       "CANDIPILOT_ADZUNA_BASE": BASE + "/fake-adzuna", "ADZUNA_APP_ID": "id-test", "ADZUNA_APP_KEY": "cle-test", "CANDIPILOT_DEFAULT_SOURCES": "0",
        "CANDIPILOT_DATA": tempfile.mkdtemp(), "CANDIPILOT_ATS_BASE": BASE + "/fake-ats"}
 srv = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)], env=env, cwd=str(ROOT),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -113,6 +114,9 @@ try:
     ft = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "francetravail"}
     check("Alternance - Assistant contrôle de gestion (H/F)" in ft and ft["Alternance - Assistant contrôle de gestion (H/F)"]["url"].startswith("https://candidat.francetravail.fr"),
           f"offres France Travail (API officielle) ajoutées, avec le lien d'origine : {sorted(ft)}")
+    az = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "adzuna"}
+    check(set(az) == {"Stage Analyste Financier M&A"} and az["Stage Analyste Financier M&A"]["url"].startswith("https://www.adzuna.fr"),
+          f"offres Adzuna ajoutées (balises HTML retirées, offre hors profil écartée) : {sorted(az)}")
     sm = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "sitemap"}
     check(set(sm) == {"Stage Analyste Crédit", "Stage Contrôle de gestion"} and sm["Stage Analyste Crédit"]["entreprise"] == "Maison Y",
           "offres du site carrières : page interdite par robots.txt jamais lue, offre à Madrid écartée, nom propre de l'entreprise")

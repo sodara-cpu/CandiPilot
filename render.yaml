@@ -32,6 +32,11 @@ services:
         sync: false
       - key: FRANCE_TRAVAIL_CLIENT_SECRET
         sync: false
+      # Offres de l'agrégateur Adzuna (developer.adzuna.com).
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
       # E-mails « mot de passe oublié » : clé API Brevo (recommandé), sinon SMTP.
       - key: CANDIPILOT_BREVO_API_KEY
         sync: false

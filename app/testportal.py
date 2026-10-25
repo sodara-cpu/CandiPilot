@@ -309,6 +309,20 @@ def ft_search(request: Request, motsCles: str = ""):
     return {"resultats": [o for o in FT_OFFERS if any(w[:6] in o["intitule"].lower() for w in words)]}
 
 
+# ---------- Faux Adzuna (API de recherche d'offres) ----------
+@router.get("/fake-adzuna/{page}")
+def adzuna_search(page: int, app_id: str = "", app_key: str = "", what: str = ""):
+    if app_key != "cle-test":
+        return JSONResponse({"exception": "AUTH_FAIL"}, status_code=401)
+    offers = [{"id": 501, "title": "<strong>Stage</strong> Analyste Financier M&A", "company": {"display_name": "Cabinet Exemple"},
+               "location": {"display_name": "Paris, Ile-de-France"}, "redirect_url": "https://www.adzuna.fr/details/501",
+               "description": "Modélisation, valorisation.", "created": "2026-10-20T10:00:00Z"},
+              {"id": 502, "title": "Commercial terrain", "company": {"display_name": "Vente SA"}, "contract_type": "permanent",
+               "location": {"display_name": "Lille"}, "redirect_url": "https://www.adzuna.fr/details/502", "description": ""}]
+    w = what.lower()
+    return {"results": [o for o in offers if any(x[:6] in o["title"].lower() for x in w.split())]}
+
+
 @router.get("/fake-form/etapes")
 def fake_form_steps():
     """Formulaire en deux étapes ; l'étape 1 contient un composant (shadow DOM). L'étape 2 n'existe qu'après « Suivant »."""

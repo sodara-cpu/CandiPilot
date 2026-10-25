@@ -642,7 +642,7 @@ async function offersView() {
   bindOfferBrowser("all", offers, {
     head: "<th>Poste</th><th>Entreprise</th><th>Lieu</th><th>Début</th><th>Match</th><th>Statut</th><th></th>",
     empty: "Aucune offre. Lance une recherche ou ajoute une offre à la main.",
-    row: (o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${esc(o.source)}</div>${reasonLine(o)}</td>
+    row: (o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${o.source === "adzuna" ? "via Adzuna" : o.source === "francetravail" ? "via France Travail" : esc(o.source)}</div>${reasonLine(o)}</td>
         <td>${esc(o.entreprise)}</td><td class="sub">${esc(o.localisation)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td>
         <td>${scoreBadge(o)}</td><td>${o.statut ? statusBadge(o.statut) : ""}</td>
         <td style="white-space:nowrap">${selectBtn(o)}${o.application_id ? `<a class="btn btn-quiet btn-sm" href="#/candidature/${o.application_id}">Ouvrir</a>` : ""}<button class="btn btn-quiet btn-sm" data-edit="${o.id}">Modifier</button>
