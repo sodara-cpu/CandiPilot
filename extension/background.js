@@ -253,6 +253,16 @@ async function framesNeedingAccess(tabId) {
 }
 self.framesNeedingAccess = framesNeedingAccess;
 
+// Installation en un clic : Chrome n'active pas une extension neuve dans les onglets déjà ouverts. On la relie
+// tout de suite à l'onglet CandiPilot d'où l'utilisateur vient de cliquer « Ajouter à Chrome » (sans recharger).
+async function injectLink() {
+  const tabs = await chrome.tabs.query({ url: chrome.runtime.getManifest().content_scripts[0].matches });
+  for (const t of tabs) await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["link.js"] }).catch(() => {});
+  return tabs.length;
+}
+chrome.runtime.onInstalled.addListener(() => { injectLink().then(poll).catch(() => {}); });
+self.injectLink = injectLink;
+
 chrome.alarms.create("poll", { periodInMinutes: 0.5 });
 chrome.alarms.create("sites", { periodInMinutes: 360 });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === "poll") poll(); if (a.name === "sites") refreshSites().catch(() => {}); });

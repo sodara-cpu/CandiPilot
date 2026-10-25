@@ -771,6 +771,9 @@ function bindSources() {
 const SITE_LOGIN = { jobteaser: "https://www.jobteaser.com/fr/users/sign_in", linkedin: "https://www.linkedin.com/login",
   wttj: "https://www.welcometothejungle.com/fr/signin" };
 const extensionInstalled = () => !!document.documentElement.dataset.candipilotExtension;
+// L'extension vient d'être installée (« Ajouter à Chrome ») : la page se met à jour sans recharger.
+new MutationObserver(() => { if (document.getElementById("sitesCard") && extensionInstalled()) route(true); })
+  .observe(document.documentElement, { attributes: true, attributeFilter: ["data-candipilot-extension"] });
 
 function sitesCard(ag) {
   if (ag.robot !== "extension") return `<section class="card pad"><h2>Robot</h2><p class="sub" style="margin:4px 0 0;font-size:14px">${ag.robot === "simule" ? "Mode démonstration : robot simulé, aucune vraie candidature." : "Robot local : il utilise le navigateur de la machine qui héberge CandiPilot."}</p></section>`;

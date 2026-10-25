@@ -2,6 +2,8 @@
 // son jeton. L'utilisateur n'a rien à saisir.
 (() => {
   if (!document.querySelector('meta[name="candipilot"]')) return;     // pas une page CandiPilot
+  if (window.__candipilotLink) return;                               // déjà actif (injecté à l'installation)
+  window.__candipilotLink = true;
   document.documentElement.dataset.candipilotExtension = chrome.runtime.getManifest().version;
   let done = false;
   async function tryLink() {

@@ -79,6 +79,8 @@ try:
         page.get_by_role("button", name="Créer mon compte").click()
         check(until(lambda: api.get(BASE + "/api/agent/status").json().get("linked"), 30), "extension reliée toute seule au compte")
         check(page.evaluate("document.documentElement.dataset.candipilotExtension") == json.load(open(ROOT / "extension/manifest.json"))["version"], "l'appli voit que l'extension est installée")
+        check(sw.evaluate("injectLink()") >= 1 and page.evaluate("document.querySelectorAll('meta[name=candipilot]').length") == 1,
+              "à l'installation, l'extension s'active dans l'onglet CandiPilot déjà ouvert (sans recharger)")
 
         api.put(BASE + "/api/profile", data={"phone": "+33600000000", "availability": "Mars 2027", "gender": "Homme",
                                               "linkedin": "https://www.linkedin.com/in/alex-martin"})
