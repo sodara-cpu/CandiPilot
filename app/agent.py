@@ -137,16 +137,18 @@ def _payload(c, job: dict) -> Optional[dict]:
 
 
 @router.get("/api/agent/next")
-def next_job(response: Response, user=Agent):
-    """Prochaine tâche de CET utilisateur (204 s'il n'y en a pas)."""
+def next_job(response: Response, urgent: int = 0, user=Agent):
+    """Prochaine tâche de CET utilisateur (204 s'il n'y en a pas). urgent=1 : seulement ses actions (préparer,
+    envoyer, vérifier), demandé par l'extension entre deux offres pendant une longue recherche."""
     with db.tx() as c:
         worker.release_stale(c)
         while True:
             # Les actions demandées par l'utilisateur passent avant les recherches (longues) et les vérifications de sites.
+            types = ("submit", "prepare", "verify") if urgent else worker.AGENT_TYPES
             j = c.execute(f"""SELECT * FROM jobs WHERE user_id=? AND statut='en_attente'
-                              AND type IN ({','.join('?' * len(worker.AGENT_TYPES))})
+                              AND type IN ({','.join('?' * len(types))})
                               ORDER BY CASE WHEN type IN ('submit','prepare','verify') THEN 0 ELSE 1 END, created_at LIMIT 1""",
-                          (user["id"], *worker.AGENT_TYPES)).fetchone()
+                          (user["id"], *types)).fetchone()
             if not j:
                 response.status_code = 204
                 return None
@@ -170,6 +172,10 @@ class ProgressIn(BaseModel):
     text: str
 
 
+class PartialIn(BaseModel):
+    found: list = []
+
+
 class ResultIn(BaseModel):
     ok: bool = True
     data: dict = {}
@@ -188,6 +194,17 @@ def _own_job(job_id: str, uid: str) -> dict:
 def job_progress(job_id: str, body: ProgressIn, user=Agent):
     _own_job(job_id, user["id"])
     worker.progress(job_id, body.text)
+    return {"ok": True}
+
+
+@router.post("/api/agent/jobs/{job_id}/partial")
+def job_partial(job_id: str, body: PartialIn, user=Agent):
+    """Paquet d'offres trouvé en cours de recherche : visible tout de suite, noté par l'IA sans attendre la fin."""
+    job = _own_job(job_id, user["id"])
+    if job["type"] != "search" or job["statut"] not in ("en_cours", "en_attente"):
+        raise HTTPException(409, "Tâche non concernée.")
+    worker.finish_search(job, body.found[:100], {"login": True}, partial=True)
+    worker.progress(job_id, f"{len(body.found)} offre(s) ajoutée(s), recherche en cours")
     return {"ok": True}
 
 

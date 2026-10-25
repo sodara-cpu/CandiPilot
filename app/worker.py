@@ -94,7 +94,9 @@ def jobteaser_ready(uid: str, app_id: str = "") -> bool:
 
 # ---------- enregistrement des résultats (commun aux trois modes) ----------
 
-def finish_search(job: dict, found: list, stats: dict) -> None:
+def finish_search(job: dict, found: list, stats: dict, partial: bool = False) -> None:
+    """Offres trouvées par une recherche JobTeaser. partial=True : un paquet envoyé en cours de recherche
+    (offres visibles au fil de l'eau) ; le résultat final renvoie tout, les doublons sont ignorés."""
     from src.search import _clean_title, _guess_domain
     uid = job["user_id"]
     with db.tx() as c:
@@ -127,6 +129,10 @@ def finish_search(job: dict, found: list, stats: dict) -> None:
                 c.execute("""INSERT INTO applications(id,user_id,offer_id,statut,mode,created_at,updated_at)
                              VALUES (?,?,?,?,?,?,?)""", (db.new_id(), uid, oid, statut,
                                                         ctx["prefs"].get("default_mode") or "auto", db.now(), db.now()))
+        if partial:
+            if found and llm.enabled():
+                enqueue(c, uid, "rank")
+            return
         c.execute("UPDATE preferences SET last_search_at=? WHERE user_id=?", (db.now(), uid))
         db.add_event(c, uid, "info", f"{len(found)} nouvelles offres analysées, {kept} retenues.")
         if found and llm.enabled():

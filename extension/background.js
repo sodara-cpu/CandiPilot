@@ -125,14 +125,52 @@ async function doSearch(job) {
       await sleep(1200);
     }
   }
-  await api(`/api/agent/jobs/${job.id}/progress`, { method: "POST", body: { text: `Lecture des dates de début (${cands.length} offres)` } });
+  // Dates de début : lues sur la page de l'offre (lent) seulement si nécessaire, et mémorisées 14 jours.
+  const { jtStart = {} } = await chrome.storage.local.get("jtStart");
+  const fresh = (u) => jtStart[u] && Date.now() - jtStart[u].at < 14 * 864e5;
+  const toRead = job.start_from ? cands.filter((o) => !fresh(o.url)).length : 0;
+  await api(`/api/agent/jobs/${job.id}/progress`, { method: "POST", body: { text: toRead
+    ? `Lecture des dates de début (${toRead} offre${toRead > 1 ? "s" : ""} à ouvrir sur ${cands.length})` : `${cands.length} offres trouvées` } });
+  let batch = [], i = 0;
+  const flush = async () => {        // offres envoyées par paquets : visibles et notées par l'IA sans attendre la fin
+    if (!batch.length) return;
+    await api(`/api/agent/jobs/${job.id}/partial`, { method: "POST", body: { found: batch } }).catch(() => {});
+    batch = [];
+  };
   for (const o of cands) {
-    tab = await robotTab(o.url);
-    const { iso } = await run(tab, jtReadStart);
-    if (job.start_from && (!iso || iso < job.start_from)) { stats.date++; continue; }
+    let iso = "";
+    if (job.start_from) {
+      if (fresh(o.url)) iso = jtStart[o.url].iso;
+      else {
+        tab = await robotTab(o.url);
+        iso = (await run(tab, jtReadStart)).iso;
+        jtStart[o.url] = { iso, at: Date.now() };
+        if (++i % 5 === 0) {           // entre deux offres : tes actions (préparer, envoyer) passent avant la suite
+          await chrome.storage.local.set({ jtStart });
+          await runUrgent();
+        }
+      }
+      if (!iso || iso < job.start_from) { stats.date++; continue; }
+    }
     found.push({ ...o, start_date: iso });
+    batch.push({ ...o, start_date: iso });
+    if (batch.length >= 10) await flush();
   }
+  await chrome.storage.local.set({ jtStart });
+  await flush();
   return { found, stats };
+}
+
+// Pendant une longue recherche : exécute tout de suite les actions demandées par l'utilisateur.
+async function runUrgent() {
+  for (let n = 0; n < 5; n++) {
+    const job = await api("/api/agent/next?urgent=1").catch(() => null);
+    if (!job) return;
+    let body;
+    try { body = { ok: true, data: await execute(job) }; }
+    catch (e) { body = { ok: false, error: String(e.message || e).slice(0, 300) }; }
+    await api(`/api/agent/jobs/${job.id}/result`, { method: "POST", body }).catch(() => {});
+  }
 }
 
 async function doSubmit(job) {
