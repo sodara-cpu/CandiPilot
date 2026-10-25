@@ -19,7 +19,9 @@ services:
         value: "1"
       - key: CANDIPILOT_TRUST_PROXY
         value: "1"
-      # E-mails « mot de passe oublié » : à remplir dans le tableau de bord Render.
+      # E-mails « mot de passe oublié » : clé API Brevo (recommandé), sinon SMTP.
+      - key: CANDIPILOT_BREVO_API_KEY
+        sync: false
       - key: CANDIPILOT_SMTP_HOST
         value: smtp.gmail.com
       - key: CANDIPILOT_SMTP_PORT

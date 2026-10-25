@@ -145,8 +145,34 @@ def send_mail_logged(to: str, subject: str, body: str) -> None:
         print(f"[e-mail] ÉCHEC de l'envoi à {to} : {type(e).__name__}: {e}", flush=True)
 
 
+def _sender() -> tuple:
+    """(nom, adresse) de l'expéditeur, depuis CANDIPILOT_SMTP_FROM (« Nom <adresse> » ou « adresse »)."""
+    raw = os.environ.get("CANDIPILOT_SMTP_FROM") or os.environ.get("CANDIPILOT_SMTP_USER", "")
+    m = re.match(r"\s*(.*?)\s*<([^>]+)>\s*$", raw)
+    return (m.group(1) or "CandiPilot", m.group(2)) if m else ("CandiPilot", raw.strip())
+
+
+def _send_brevo(key: str, to: str, subject: str, body: str) -> None:
+    """API transactionnelle de Brevo (HTTPS : jamais bloquée par les hébergeurs, contrairement au SMTP)."""
+    import json as _json
+    import urllib.request
+    name, email = _sender()
+    payload = {"sender": {"name": name, "email": email}, "to": [{"email": to}], "subject": subject, "textContent": body}
+    req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=_json.dumps(payload).encode(), method="POST",
+                                 headers={"api-key": key, "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=20).read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Brevo {e.code} : {e.read().decode(errors='ignore')[:300]}") from None
+
+
 def send_mail(to: str, subject: str, body: str) -> bool:
-    """Envoie par SMTP si CANDIPILOT_SMTP_HOST est configuré ; sinon écrit le message dans le journal du serveur."""
+    """Envoie par l'API Brevo (CANDIPILOT_BREVO_API_KEY) ou par SMTP (CANDIPILOT_SMTP_HOST) ;
+    sinon écrit le message dans le journal du serveur."""
+    brevo = os.environ.get("CANDIPILOT_BREVO_API_KEY", "").strip()
+    if brevo:
+        _send_brevo(brevo, to, subject, body)
+        return True
     host = os.environ.get("CANDIPILOT_SMTP_HOST")
     if not host:
         print(f"[e-mail non envoyé : SMTP non configuré] À : {to}\nObjet : {subject}\n{body}", flush=True)
