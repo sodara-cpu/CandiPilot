@@ -142,8 +142,10 @@ def next_job(response: Response, user=Agent):
     with db.tx() as c:
         worker.release_stale(c)
         while True:
+            # Les actions demandées par l'utilisateur passent avant les recherches (longues) et les vérifications de sites.
             j = c.execute(f"""SELECT * FROM jobs WHERE user_id=? AND statut='en_attente'
-                              AND type IN ({','.join('?' * len(worker.AGENT_TYPES))}) ORDER BY created_at LIMIT 1""",
+                              AND type IN ({','.join('?' * len(worker.AGENT_TYPES))})
+                              ORDER BY CASE WHEN type IN ('submit','prepare','verify') THEN 0 ELSE 1 END, created_at LIMIT 1""",
                           (user["id"], *worker.AGENT_TYPES)).fetchone()
             if not j:
                 response.status_code = 204

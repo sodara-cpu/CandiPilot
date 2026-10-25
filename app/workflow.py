@@ -206,8 +206,16 @@ def guide(c, uid: str) -> dict:
     n_selected = c.execute("""SELECT COUNT(*) n FROM applications WHERE user_id=? AND selected=1
                               AND statut<>'ignoree'""", (uid,)).fetchone()["n"]
     n_offers = c.execute("SELECT COUNT(*) n FROM offers WHERE user_id=?", (uid,)).fetchone()["n"]
-    searching = bool(c.execute("""SELECT 1 FROM jobs WHERE user_id=? AND type='search'
-                                  AND statut IN ('en_attente','en_cours')""", (uid,)).fetchone())
+    # Ce qui tourne en ce moment, en clair (plutôt qu'un bouton qui tourne sans rien dire).
+    running = db.rows(c.execute("""SELECT type, statut, progress, created_at FROM jobs WHERE user_id=?
+                                   AND type IN ('search','discover','rank') AND statut IN ('en_attente','en_cours')
+                                   ORDER BY created_at""", (uid,)))
+    searching = any(r["type"] in ("search", "discover") for r in running)
+    disc = next((r for r in running if r["type"] == "discover"), None)
+    arrived = c.execute("""SELECT COUNT(*) n FROM offers WHERE user_id=? AND source<>'jobteaser' AND created_at>=?""",
+                        (uid, disc["created_at"])).fetchone()["n"] if disc else 0
+    search_status = [{"type": r["type"], "statut": r["statut"], "progress": r["progress"] or "", "since": r["created_at"],
+                      "arrived": arrived if r["type"] == "discover" else None} for r in running]
     mode = pr["default_mode"]
     optional = mode in ("assisted", "manual")
     st = launch_state(c, uid)
@@ -255,8 +263,8 @@ def guide(c, uid: str) -> dict:
         {"key": "documents", "label": "Importe ton CV et ta lettre", "href": "#/documents", "done": not mdocs,
          "missing": mdocs, "help": missing_text(mdocs) or "Documents prêts."},
         {"key": "criteria", "label": "Choisis tes critères", "href": "#/criteres", "done": not crit_missing,
-         "missing": crit_missing, "waiting": searching,
-         "help": "Recherche en cours : les offres apparaissent dans quelques minutes." if searching
+         "missing": crit_missing,      # une recherche en cours ne bloque rien : les offres arrivent au fil de l'eau
+         "help": "Recherche en cours : coche déjà les offres arrivées, les autres s'ajoutent au fil de l'eau." if searching
          else (missing_text(crit_missing) + " Renseigne tes critères, lance « Rechercher des offres » puis coche celles qui t'intéressent.").strip()},
         {"key": "mode", "label": "Choisis le mode de soumission", "href": "#/mode", "done": not mode_missing,
          "missing": mode_missing, "help": missing_text(mode_missing) or f"Mode : {MODES[mode][0]}."},
@@ -276,4 +284,4 @@ def guide(c, uid: str) -> dict:
         else:
             nxt = {"label": "Sélectionne de nouvelles offres", "href": "#/criteres",
                    "help": "Ton copilote continue de chercher : coche les offres qui t'intéressent pour un nouveau lancement."}
-    return {"steps": steps, "current": current, "next": nxt, "searching": searching}
+    return {"steps": steps, "current": current, "next": nxt, "searching": searching, "search_status": search_status}

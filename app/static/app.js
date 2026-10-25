@@ -576,6 +576,21 @@ async function applicationsView() {
   schedulePoll(apps.some((a) => ["preparation", "soumission"].includes(a.statut)) ? 4000 : 0);
 }
 
+// Avancement de la recherche, source par source (au lieu d'un bouton qui tourne sans rien dire).
+function searchStatus(list, ag) {
+  if (!list.length) return "";
+  const line = (r) => {
+    const t = ago(r.since);
+    if (r.type === "search") return r.statut === "en_attente"
+      ? `<b>JobTeaser</b> : en attente de ton extension${ag && !ag.online ? " — ouvre Chrome pour qu'elle démarre" : ""} (demandée ${t})`
+      : `<b>JobTeaser</b> : ${esc(r.progress || "recherche en cours")} <span class="sub">(lancée ${t})</span>`;
+    if (r.type === "discover") return `<b>Sites des entreprises</b> : lecture en cours — ${r.arrived} offre${r.arrived > 1 ? "s" : ""} déjà arrivée${r.arrived > 1 ? "s" : ""}, visibles ci-dessous`;
+    return `<b>IA</b> : notation et explication des nouvelles offres`;
+  };
+  return `<ul class="srchstat" aria-live="polite">${list.map((r) => `<li><span class="spin"></span>${line(r)}</li>`).join("")}
+    <li class="sub" style="padding-left:22px">Tu peux continuer à utiliser CandiPilot : les offres s'ajoutent au fil de l'eau.</li></ul>`;
+}
+
 // ---------- liste d'offres : recherche, filtres, tri, pages de 10 ----------
 const PAGE_SIZE = 10;
 const OB_FILTERS = [["all", "Toutes"], ["selected", "Sélectionnées"], ["todo", "À sélectionner"], ["easy", "Candidature simplifiée"], ["top", "Score ≥ 70 %"]];
@@ -723,6 +738,7 @@ async function prefsView() {
       </details>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-ghost" type="submit">Enregistrer</button>
         <button class="btn btn-primary" type="button" id="searchNow" ${searching ? "disabled" : ""}>${searching ? '<span class="spin"></span> Recherche en cours…' : "Rechercher des offres"}</button></div>
+      ${searchStatus(GUIDE?.search_status || [], ag)}
     </form>
     <section class="card pad stack">
       <div class="spread"><div><h2>Offres trouvées</h2><div class="sub" style="font-size:14px">${open.length} offre${open.length > 1 ? "s" : ""} · <b>${nSel} sélectionnée${nSel > 1 ? "s" : ""}</b></div></div>

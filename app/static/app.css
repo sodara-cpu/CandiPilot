@@ -287,3 +287,4 @@ details.adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mu
 .srcgrid li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .srcgrid li .btn{padding:0 6px;min-height:24px}
 .srcchips.scroll{max-height:220px;overflow:auto;padding:2px}
+.srchstat{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px;font-size:13.5px}.srchstat li{display:flex;gap:8px;align-items:center}
