@@ -666,7 +666,7 @@ const SUGGEST = {
     "Strasbourg", "Luxembourg", "Londres", "Genève", "Bruxelles", "Télétravail"],
 };
 async function prefsView() {
-  const [p, offers, ag] = await Promise.all([api("/api/preferences"), api("/api/offers"), api("/api/agent/status")]);
+  const [p, offers, ag, src] = await Promise.all([api("/api/preferences"), api("/api/offers"), api("/api/agent/status"), api("/api/sources")]);
   const lists = { metiers: [...p.metiers], zones: [...p.zones], contrats: [...p.contrats] };
   const open = offers.filter((o) => !["ignoree", "confirmee", "soumission"].includes(o.statut) && !o.launched);
   const nSel = open.filter((o) => o.selected).length;
@@ -674,6 +674,7 @@ async function prefsView() {
   shell("prefs", `
     <header class="head"><div class="titles"><h1>3. Critères et offres</h1><p class="sub" style="margin:4px 0 0">Indique ce que tu cherches, lance la recherche, puis coche les offres auxquelles postuler. Rien n'est envoyé à cette étape.</p></div></header>
     ${sitesCard(ag)}
+    ${sourcesCard(src)}
     <form class="card pad form" id="pf">
       <h2>Mes critères</h2>
       ${[["metiers", "Métiers ciblés *", "ex. M&A, private debt, contrôle de gestion"], ["zones", "Localisations", "ex. Paris — laisse vide pour partout"]].map(([k, l, ph]) => `
@@ -736,7 +737,31 @@ async function prefsView() {
     after: bindSelect,
   });
   bindSites(ag);
+  bindSources();
   if (searching || open.some((o) => o.selected && o.statut === "preparation") || (ag.robot === "extension" && !ag.linked)) schedulePoll(4000);
+}
+
+// ---------- sources d'offres : entreprises lues via les API publiques des plateformes de recrutement ----------
+function sourcesCard(src) {
+  const st = (x) => x.last_status.startsWith("erreur") ? `<span class="koc">${esc(x.last_status)}</span>` : `<span class="sub">${esc(x.last_status || "en attente")}</span>`;
+  return `<section class="card pad stack" id="srcCard">
+    <div><h2>Mes sources d'offres</h2>
+      <div class="sub" style="font-size:14px">Ajoute les entreprises qui t'intéressent : CandiPilot lit leurs offres directement sur leur plateforme de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Workable), sans compte ni robot.</div></div>
+    <form id="srcForm" class="row" style="flex-wrap:wrap">
+      <input type="url" name="url" placeholder="Adresse de la page carrières, ex. https://boards.greenhouse.io/adyen" aria-label="Adresse de la page carrières" style="flex:1 1 300px" required>
+      <button class="btn btn-primary" type="submit">Ajouter</button></form>
+    ${src.suggestions.length ? `<div class="ob-f" aria-label="Entreprises suggérées"><span class="hint" style="align-self:center">Suggestions :</span>${src.suggestions.map((x) =>
+      `<button type="button" class="pill" data-sugg="${esc(JSON.stringify(x))}">+ ${esc(x.company)}</button>`).join("")}</div>` : ""}
+    ${src.sources.length ? `<ul class="sitelist">${src.sources.map((x) => `<li><b>${esc(x.company)}</b><span class="badge b-mute">${esc(x.platform_label)}</span>${st(x)}
+      <button class="btn btn-quiet btn-sm" data-delsrc="${x.id}" aria-label="Retirer ${esc(x.company)}">Retirer</button></li>`).join("")}</ul>` : ""}
+  </section>`;
+}
+
+function bindSources() {
+  const add = (body, msg) => act(() => api("/api/sources", { method: "POST", body }), msg).then(route).catch(() => {});
+  document.getElementById("srcForm").onsubmit = (e) => { e.preventDefault(); const url = e.target.url.value.trim(); if (url) add({ url }, "Entreprise ajoutée : ses offres arrivent dans quelques instants."); };
+  $app.querySelectorAll("[data-sugg]").forEach((b) => b.onclick = () => { b.disabled = true; add(JSON.parse(b.dataset.sugg), "Entreprise ajoutée."); });
+  $app.querySelectorAll("[data-delsrc]").forEach((b) => b.onclick = () => act(() => api(`/api/sources/${b.dataset.delsrc}`, { method: "DELETE" }), "Source retirée.").then(route));
 }
 
 // ---------- sites connectés (extension du navigateur) ----------

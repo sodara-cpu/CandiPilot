@@ -7,6 +7,8 @@ Les candidatures reçues sont visibles sur /fake-jobteaser/_submissions.
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -156,3 +158,63 @@ def fake_form():
         <label><input type="checkbox" name="rgpd"> J'accepte la politique de confidentialité</label><br>
         <button type="submit">Envoyer ma candidature</button>
       </form>""")
+
+
+# ---------- Fausses API de plateformes de recrutement (découverte multi-sources, lot 2) ----------
+ATS_JOBS = {   # mêmes offres vues par plusieurs plateformes pour tester les doublons
+    "gh1": {"title": "Finance Intern (H/F)", "location": "Paris, France", "contract": ""},
+    "gh2": {"title": "Senior Backend Engineer", "location": "Paris, France", "contract": ""},
+    "gh3": {"title": "M&A Analyst Internship", "location": "London, UK", "contract": ""},
+}
+ATS_EXPIRED: set = set()
+
+
+def _live():
+    return {k: v for k, v in ATS_JOBS.items() if k not in ATS_EXPIRED}
+
+
+@router.get("/fake-ats/greenhouse/{token}")
+def fake_greenhouse(token: str):
+    return {"jobs": [{"id": k, "title": v["title"], "absolute_url": f"https://boards.greenhouse.io/{token}/jobs/{k}",
+                      "location": {"name": v["location"]}, "content": "&lt;p&gt;Analyse financière, Excel.&lt;/p&gt;",
+                      "updated_at": "2026-10-20"} for k, v in _live().items()]}
+
+
+@router.get("/fake-ats/lever/{token}")
+def fake_lever(token: str):          # la même offre « Finance Intern » publiée aussi sur Lever (doublon)
+    return [{"id": "lv1", "text": "Finance Intern", "hostedUrl": f"https://jobs.lever.co/{token}/lv1",
+             "categories": {"location": "Paris, France", "commitment": "Internship"}, "descriptionPlain": "Stage finance."}]
+
+
+@router.get("/fake-ats/ashby/{token}")
+def fake_ashby(token: str):
+    return {"jobs": [{"id": "as1", "title": "Corporate Finance Intern", "location": "Paris", "employmentType": "Intern",
+                      "jobUrl": f"https://jobs.ashbyhq.com/{token}/as1", "descriptionPlain": "Stage.", "isRemote": False}]}
+
+
+@router.get("/fake-ats/smartrecruiters/{token}")
+def fake_smartrecruiters(token: str):
+    return {"content": [{"id": "sr1", "name": "Stage Analyste Financier", "company": {"name": "Ubi Test"},
+                         "location": {"city": "Lyon", "country": "fr"}, "typeOfEmployment": {"label": "Internship"}}]}
+
+
+@router.get("/fake-ats/workable/{token}")
+def fake_workable(token: str):
+    return {"name": "Hug Test", "jobs": [{"title": "Finance Operations Intern", "shortcode": "wk1",
+                                         "url": f"https://apply.workable.com/{token}/j/wk1", "city": "Paris", "country": "France",
+                                         "employment_type": "Internship"}]}
+
+
+@router.get("/fake-ats/page/{company}")
+def fake_jsonld_page(company: str):
+    data = {"@context": "https://schema.org", "@type": "JobPosting", "title": "Stage Contrôle de gestion",
+            "url": f"https://www.{company}.example/jobs/42", "hiringOrganization": {"@type": "Organization", "name": company.title()},
+            "jobLocation": {"@type": "Place", "address": {"addressLocality": "Paris", "addressCountry": "FR"}},
+            "employmentType": "INTERN", "description": "<p>Contrôle de gestion, finance.</p>", "datePosted": "2026-10-01"}
+    return HTMLResponse(f'<html><head><script type="application/ld+json">{json.dumps(data)}</script></head><body>Carrières</body></html>')
+
+
+@router.post("/fake-ats/_expire/{ref}")
+def fake_expire(ref: str):
+    ATS_EXPIRED.add(ref)
+    return {"ok": True}

@@ -87,6 +87,8 @@ def blockers(c, a: dict, uid: str, pr: dict, missing_prof=None) -> tuple:
     b, w = [], []
     link = f"#/candidature/{a['id']}"
     s = a["statut"]
+    if a.get("expired_at"):
+        b.append({"label": "Offre expirée : elle n'est plus publiée", "action": "ignore", "cta": "Retirer"})
     if s == "preparation":
         return [{"label": "Préparation technique en cours (lettre, lecture du formulaire)", "wait": True}], w
     if s in ("decouverte", "qualifiee"):
@@ -123,8 +125,8 @@ def blockers(c, a: dict, uid: str, pr: dict, missing_prof=None) -> tuple:
     return b, w
 
 
-APP_SQL = """SELECT a.*, o.url, o.poste, o.entreprise, o.localisation, o.contrat, o.start_date, o.apply_type, o.score
-             FROM applications a JOIN offers o ON o.id=a.offer_id"""
+APP_SQL = """SELECT a.*, o.url, o.poste, o.entreprise, o.localisation, o.contrat, o.start_date, o.apply_type, o.score,
+             o.expired_at FROM applications a JOIN offers o ON o.id=a.offer_id"""
 
 
 def pending(c, uid: str) -> list:

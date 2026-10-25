@@ -21,6 +21,7 @@ echo "== API";       $PY tests/test_api.py "http://127.0.0.1:$PORT"
 echo "== Parcours";  $PY tests/test_workflow.py "http://127.0.0.1:$PORT" "$TMP/server.log"
 echo "== CV";        $PY tests/test_cv.py "http://127.0.0.1:$PORT"
 echo "== Fondations"; $PY tests/test_foundations.py "http://127.0.0.1:$PORT"
+echo "== Découverte"; $PY tests/test_discovery.py $((PORT + 40))
 echo "== Interface"; $PY tests/test_ui.py "http://127.0.0.1:$PORT" "$TMP/ui"
 echo "== Extension"; $PY tests/test_extension.py $((PORT + 30))
 echo "Tous les tests sont passés."

@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -499,10 +500,72 @@ def launch_search(user=CurrentUser):
         p = c.execute("SELECT metiers, jobteaser_status FROM preferences WHERE user_id=?", (user["id"],)).fetchone()
         if not db.jload(p["metiers"], []):
             raise HTTPException(422, "Ajoute au moins un métier ciblé dans tes critères.")
-        if not worker.FAKE and p["jobteaser_status"] != "connected":
-            raise HTTPException(422, "Connecte d'abord ton compte JobTeaser (bouton « Connecter mon JobTeaser »).")
+        has_sources = c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (user["id"],)).fetchone()
+        jobteaser_ok = worker.FAKE or p["jobteaser_status"] == "connected"
+        if not has_sources and not jobteaser_ok:
+            raise HTTPException(422, "Connecte d'abord ton compte JobTeaser, ou ajoute une entreprise dans « Mes sources d'offres ».")
+        if has_sources:
+            worker.enqueue(c, user["id"], "discover")
+        if not jobteaser_ok:
+            return {"job_id": None, "sources": True}
         jid = worker.enqueue(c, user["id"], "search")
     return {"job_id": jid}
+
+
+# ===================== Sources d'offres (lot 2 : plateformes de recrutement) =====================
+
+class SourceIn(BaseModel):
+    url: str = ""
+    platform: str = ""
+    token: str = ""
+    company: str = ""
+
+
+@app.get("/api/sources")
+def list_sources(user=CurrentUser):
+    with db.tx() as c:
+        mine = db.rows(c.execute("SELECT * FROM job_sources WHERE user_id=? ORDER BY created_at", (user["id"],)))
+    have = {(x["platform"], x["token"].lower()) for x in mine}
+    from .discovery import PLATFORMS
+    return {"sources": [{**x, "platform_label": PLATFORMS.get(x["platform"], x["platform"])} for x in mine],
+            "suggestions": [{"platform": p, "token": t, "company": n, "platform_label": PLATFORMS[p]}
+                            for p, t, n in migrations.SUGGESTED_SOURCES if (p, t.lower()) not in have]}
+
+
+@app.post("/api/sources", status_code=201)
+def add_source(body: SourceIn, user=CurrentUser):
+    """Ajoute une entreprise : on reconnaît sa plateforme à partir de l'adresse et on vérifie qu'on lit bien ses offres."""
+    from . import discovery
+    platform, token = (body.platform, body.token) if body.platform and body.token else discovery.detect_source(body.url.strip())
+    if platform not in discovery.PLATFORMS:
+        raise HTTPException(422, "Adresse non reconnue : colle l'adresse de la page carrières de l'entreprise.")
+    try:
+        jobs = discovery.fetch(platform, token, body.company)
+    except PermissionError as e:
+        raise HTTPException(422, f"Lecture non autorisée par le site : {e}")
+    except Exception:
+        raise HTTPException(422, "Impossible de lire les offres de cette entreprise à cette adresse.")
+    if platform == "jsonld" and not jobs:
+        raise HTTPException(422, "Cette page ne publie pas ses offres dans un format lisible. Essaie l'adresse de sa page d'offres "
+                                 "(souvent sur Greenhouse, Lever, Ashby, SmartRecruiters ou Workable).")
+    company = body.company or (jobs[0]["company"] if jobs and jobs[0]["company"] != token else discovery.company_name(platform, token)) \
+        or urlparse(token).netloc
+    sid = db.new_id()
+    with db.tx() as c:
+        if c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND platform=? AND token=?", (user["id"], platform, token)).fetchone():
+            raise HTTPException(409, "Cette entreprise est déjà dans tes sources.")
+        c.execute("""INSERT INTO job_sources(id,user_id,platform,token,company,last_status,last_count,created_at)
+                     VALUES (?,?,?,?,?,?,?,?)""", (sid, user["id"], platform, token, company, f"ajoutée : {len(jobs)} offres publiées", 0, db.now()))
+        worker.enqueue(c, user["id"], "discover")
+    return {"id": sid, "platform": platform, "token": token, "company": company, "published": len(jobs)}
+
+
+@app.delete("/api/sources/{source_id}")
+def delete_source(source_id: str, user=CurrentUser):
+    with db.tx() as c:
+        if not c.execute("DELETE FROM job_sources WHERE id=? AND user_id=?", (source_id, user["id"])).rowcount:
+            raise HTTPException(404, "Source introuvable.")
+    return {"ok": True}
 
 
 @app.get("/api/jobs")
@@ -594,7 +657,8 @@ def _rescore(c, uid: str) -> None:
 @app.get("/api/offers")
 def list_offers(q: str = "", min_score: int = 0, user=CurrentUser):
     sql = """SELECT o.*, a.id AS application_id, a.statut, a.selected, a.launched FROM offers o
-             LEFT JOIN applications a ON a.offer_id=o.id WHERE o.user_id=? AND o.score>=?"""
+             LEFT JOIN applications a ON a.offer_id=o.id WHERE o.user_id=? AND o.score>=?
+             AND (o.expired_at='' OR o.expired_at IS NULL OR a.launched=1)"""
     args = [user["id"], min_score]
     if q:
         sql += " AND (o.poste LIKE ? OR o.entreprise LIKE ? OR o.localisation LIKE ?)"

@@ -46,8 +46,10 @@ def log_event(event: str, **fields) -> None:
 
 def enqueue(conn, user_id: str, kind: str, application_id: str = "") -> str:
     """Ajoute une tâche, sauf si la même est déjà en file (pas de doublon d'envoi)."""
-    dup = conn.execute("""SELECT id FROM jobs WHERE user_id=? AND type=? AND application_id=?
-                          AND statut IN ('en_attente','en_cours')""", (user_id, kind, application_id)).fetchone()
+    # Découverte : une nouvelle passe est permise pendant qu'une autre tourne (sources ajoutées entre-temps).
+    states = "('en_attente')" if kind == "discover" else "('en_attente','en_cours')"
+    dup = conn.execute(f"""SELECT id FROM jobs WHERE user_id=? AND type=? AND application_id=?
+                          AND statut IN {states}""", (user_id, kind, application_id)).fetchone()
     if dup:
         return dup["id"]
     jid = db.new_id()
@@ -361,18 +363,83 @@ def _fake_search(cfg: dict, known: set) -> list:
     return out
 
 
-HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify}
+def run_discover(job: dict) -> None:
+    """Découverte multi-sources (lot 2) : API publiques des plateformes de recrutement, côté serveur."""
+    from . import discovery
+    uid, started = job["user_id"], db.now()
+    with db.tx() as c:
+        ctx = robot.load_context(c, uid)
+        sources = db.rows(c.execute("SELECT * FROM job_sources WHERE user_id=? AND enabled=1", (uid,)))
+        for src in sources:      # nom lisible pour les offres (les anciennes sources gardaient l'identifiant)
+            if src["company"] == src["token"]:
+                src["company"] = discovery.company_name(src["platform"], src["token"])
+    prefs, prof = ctx["prefs"], ctx["profile"]
+    min_score = int(prefs.get("min_score") or 50)
+    wanted = [x.lower() for x in prefs.get("contrats") or []]
+    zones = [z.lower() for z in prefs.get("zones") or []]
+    total_new = 0
+    for src in sources:
+        try:
+            jobs = discovery.fetch(src["platform"], src["token"], src["company"])
+        except Exception as e:
+            with db.tx() as c:
+                c.execute("UPDATE job_sources SET last_run_at=?, last_status=? WHERE id=?", (db.now(), f"erreur : {e}"[:200], src["id"]))
+            log_event("discover_error", user=uid, source=f"{src['platform']}:{src['token']}", error=str(e)[:200])
+            continue
+        new = kept = 0
+        with db.tx() as c:
+            for j in jobs[:500]:
+                contract = discovery.contract_of(j)
+                if wanted and not any(w in contract or w in j["contract"].lower() for w in wanted):
+                    continue
+                if zones and not any(z in j["location"].lower() for z in zones) and not (j["remote"] and "télétravail" in zones):
+                    continue
+                offer = {"poste": j["title"], "entreprise": j["company"], "localisation": j["location"], "contrat": contract,
+                         "domaine": "", "start_date": "", "apply_type": "external"}
+                score = matching.score(offer, prefs, prof)
+                if score < min_score:
+                    continue
+                kept += 1
+                fp = discovery.fingerprint(j["company"], j["title"], j["location"])
+                ref = f"{src['platform']}:{src['token']}:{j['ref']}"
+                dup = c.execute("SELECT id FROM offers WHERE user_id=? AND (url=? OR fingerprint=?)", (uid, j["url"], fp)).fetchone()
+                if dup:      # déjà connue (même adresse, ou même offre publiée ailleurs) : toujours en ligne
+                    c.execute("UPDATE offers SET last_seen_at=?, expired_at='' WHERE id=?", (db.now(), dup["id"]))
+                    continue
+                oid = db.new_id()
+                c.execute("""INSERT INTO offers(id,user_id,url,poste,entreprise,localisation,contrat,domaine,start_date,apply_type,
+                             source,score,created_at,source_ref,fingerprint,description,remote,last_seen_at)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          (oid, uid, j["url"], j["title"], j["company"], j["location"], contract, "", "", "external",
+                           src["platform"], score, db.now(), ref, fp, j["description"], int(j["remote"]), db.now()))
+                c.execute("""INSERT INTO applications(id,user_id,offer_id,statut,mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?)""",
+                          (db.new_id(), uid, oid, "qualifiee" if score >= min_score else "decouverte", "manual", db.now(), db.now()))
+                new += 1
+            # Offres de cette source qui ne sont plus publiées : expirées.
+            c.execute("""UPDATE offers SET expired_at=? WHERE user_id=? AND source_ref LIKE ? AND expired_at=''
+                         AND last_seen_at<>'' AND last_seen_at<?""", (db.now(), uid, f"{src['platform']}:{src['token']}:%", started))
+            c.execute("UPDATE job_sources SET last_run_at=?, last_status=?, last_count=? WHERE id=?",
+                      (db.now(), f"ok : {len(jobs)} offres publiées, {kept} pour toi", kept, src["id"]))
+        total_new += new
+        log_event("discover_source", user=uid, source=f"{src['platform']}:{src['token']}", published=len(jobs), kept=kept, new=new)
+    with db.tx() as c:
+        db.add_event(c, uid, "info", f"Découverte : {total_new} nouvelle(s) offre(s) sur {len(sources)} source(s).")
+
+
+HANDLERS = {"search": run_search, "prepare": run_prepare, "submit": run_submit, "verify": run_verify, "discover": run_discover}
+SERVER_TYPES = ("discover",)          # toujours exécutées par le serveur, même en mode extension
 
 
 # ---------- boucles ----------
 
 def _next_job():
     """Prochaine tâche exécutée sur le serveur (modes simulé et local ; en mode extension, c'est agent.py)."""
-    if ROBOT == "extension":
-        return None
     with db.tx() as c:
-        r = c.execute("""SELECT * FROM jobs WHERE statut='en_attente' AND type<>'check_sites'
-                         ORDER BY created_at LIMIT 1""").fetchone()
+        if ROBOT == "extension":       # le navigateur de l'utilisateur fait le reste (agent.py)
+            r = c.execute("SELECT * FROM jobs WHERE statut='en_attente' AND type='discover' ORDER BY created_at LIMIT 1").fetchone()
+        else:
+            r = c.execute("""SELECT * FROM jobs WHERE statut='en_attente' AND type<>'check_sites'
+                             ORDER BY created_at LIMIT 1""").fetchone()
         if r is None:
             return None
         c.execute("UPDATE jobs SET statut='en_cours', updated_at=? WHERE id=?", (db.now(), r["id"]))
@@ -426,8 +493,14 @@ def _scheduler_loop() -> None:
                 last = p["last_search_at"]
                 due = not last or datetime.fromisoformat(last) + every <= datetime.now(timezone.utc)
                 ready = FAKE or p["jobteaser_status"] == "connected"     # jamais avec le compte d'un autre
-                if due and ready and db.jload(p["metiers"], []):
-                    enqueue(c, p["user_id"], "search")
+                if not (due and db.jload(p["metiers"], [])):
+                    continue
+                has_sources = c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (p["user_id"],)).fetchone()
+                if has_sources:
+                    enqueue(c, p["user_id"], "discover")         # plateformes de recrutement (serveur)
+                if ready:
+                    enqueue(c, p["user_id"], "search")           # JobTeaser (navigateur de l'utilisateur)
+                if has_sources or ready:
                     c.execute("UPDATE preferences SET last_search_at=? WHERE user_id=?", (db.now(), p["user_id"]))
 
 

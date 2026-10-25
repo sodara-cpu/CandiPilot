@@ -68,6 +68,35 @@ CREATE TABLE IF NOT EXISTS site_policies (
 ALTER TABLE preferences ADD COLUMN auto_submit_consent_at TEXT DEFAULT '';
 ALTER TABLE preferences ADD COLUMN daily_limit INTEGER DEFAULT 20;
 ALTER TABLE applications ADD COLUMN idempotency_key TEXT DEFAULT ''""", None),
+
+    (4, "Sources d'offres multi-plateformes, doublons, expiration", """
+CREATE TABLE IF NOT EXISTS job_sources (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  token TEXT NOT NULL,
+  company TEXT DEFAULT '',
+  enabled INTEGER DEFAULT 1,
+  last_run_at TEXT DEFAULT '',
+  last_status TEXT DEFAULT '',
+  last_count INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(user_id, platform, token)
+);
+ALTER TABLE offers ADD COLUMN source_ref TEXT DEFAULT '';
+ALTER TABLE offers ADD COLUMN fingerprint TEXT DEFAULT '';
+ALTER TABLE offers ADD COLUMN description TEXT DEFAULT '';
+ALTER TABLE offers ADD COLUMN remote INTEGER DEFAULT 0;
+ALTER TABLE offers ADD COLUMN last_seen_at TEXT DEFAULT '';
+ALTER TABLE offers ADD COLUMN expired_at TEXT DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_offers_fp ON offers(user_id, fingerprint)""", None),
+]
+
+# Entreprises proposées à l'ajout (identifiants vérifiés sur les API publiques).
+SUGGESTED_SOURCES = [
+    ("greenhouse", "adyen", "Adyen"), ("greenhouse", "datadog", "Datadog"), ("greenhouse", "figma", "Figma"),
+    ("greenhouse", "anthropic", "Anthropic"), ("ashby", "alan", "Alan"), ("smartrecruiters", "Ubisoft2", "Ubisoft"),
+    ("workable", "huggingface", "Hugging Face"),
 ]
 
 # Niveau d'automatisation par défaut (modifiable par le propriétaire : /api/admin/sites).
