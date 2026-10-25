@@ -8,6 +8,7 @@ PY=${PY:-.venv/bin/python}
 PORT=${PORT:-8765}
 TMP=$(mktemp -d)
 export CANDIPILOT_FAKE_ROBOT=1 CANDIPILOT_DATA="$TMP/data"
+export CANDIPILOT_DEFAULT_SOURCES=0   # pas d'appel aux vraies plateformes pendant les tests (voir test_defaults)
 unset ANTHROPIC_API_KEY      # jamais d'appel payant à Claude pendant les tests (simulation : test_llm, test_discovery)
 
 $PY -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" > "$TMP/server.log" 2>&1 &
@@ -24,6 +25,7 @@ echo "== CV";        $PY tests/test_cv.py "http://127.0.0.1:$PORT"
 echo "== Fondations"; $PY tests/test_foundations.py "http://127.0.0.1:$PORT"
 echo "== Découverte"; $PY tests/test_discovery.py $((PORT + 40))
 echo "== Matching IA"; $PY tests/test_llm.py
+echo "== Sources par défaut"; $PY tests/test_defaults.py
 echo "== Interface"; $PY tests/test_ui.py "http://127.0.0.1:$PORT" "$TMP/ui"
 echo "== Extension"; $PY tests/test_extension.py $((PORT + 30))
 echo "Tous les tests sont passés."

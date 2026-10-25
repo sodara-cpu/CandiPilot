@@ -6,6 +6,8 @@ Pour ajouter une migration : l'ajouter à la fin de MIGRATIONS (ne jamais modifi
 """
 from __future__ import annotations
 
+import os
+
 from . import db
 
 # (version, description, SQL SQLite, SQL PostgreSQL — None = identique)
@@ -104,14 +106,20 @@ CREATE TABLE IF NOT EXISTS llm_usage (
   cache_read_tokens INTEGER DEFAULT 0,
   PRIMARY KEY (user_id, day)
 )""", None),
+    (6, "Entreprises suivies par défaut (ajoutées une seule fois par compte)", """
+ALTER TABLE preferences ADD COLUMN default_sources_at TEXT DEFAULT ''""", None),
 ]
 
-# Entreprises proposées à l'ajout (identifiants vérifiés sur les API publiques).
-SUGGESTED_SOURCES = [
-    ("greenhouse", "adyen", "Adyen"), ("greenhouse", "datadog", "Datadog"), ("greenhouse", "figma", "Figma"),
-    ("greenhouse", "anthropic", "Anthropic"), ("ashby", "alan", "Alan"), ("smartrecruiters", "Ubisoft2", "Ubisoft"),
-    ("workable", "huggingface", "Hugging Face"),
+# Entreprises suivies par défaut pour chaque compte (identifiants vérifiés le 25/10/2026 sur leurs API publiques :
+# offres en France, dont des stages et alternances). Ajoutées une seule fois ; l'utilisateur peut en retirer.
+DEFAULT_SOURCES = [
+    ("greenhouse", "doctolib", "Doctolib"), ("greenhouse", "mirakl", "Mirakl"), ("greenhouse", "datadog", "Datadog"),
+    ("greenhouse", "dataiku", "Dataiku"), ("greenhouse", "algolia", "Algolia"), ("greenhouse", "adyen", "Adyen"),
+    ("ashby", "alan", "Alan"), ("ashby", "qonto", "Qonto"), ("ashby", "pennylane", "Pennylane"), ("lever", "swile", "Swile"),
+    ("workable", "huggingface", "Hugging Face"), ("smartrecruiters", "Ubisoft2", "Ubisoft"), ("smartrecruiters", "Accor", "Accor"),
+    ("smartrecruiters", "Devoteam", "Devoteam"),
 ]
+SUGGESTED_SOURCES = DEFAULT_SOURCES      # proposées de nouveau si l'utilisateur en a retiré
 
 # Niveau d'automatisation par défaut (modifiable par le propriétaire : /api/admin/sites).
 # auto = le robot peut envoyer ; assisted = il pré-remplit, l'utilisateur envoie ; manual = remplissage seulement.
@@ -149,6 +157,22 @@ def apply(conn) -> list:
         conn.execute("""INSERT OR IGNORE INTO site_policies(domain, platform, mode_max, official_api, notes, updated_at)
                         VALUES (?,?,?,?,?,?)""", (domain, platform, mode, api, notes, db.now()))
     return applied
+
+
+def ensure_default_sources(conn, user_id: str) -> int:
+    """Ajoute les entreprises suivies par défaut à un compte, une seule fois (jamais après un retrait).
+    Désactivable (tests sans Internet) : CANDIPILOT_DEFAULT_SOURCES=0."""
+    if os.environ.get("CANDIPILOT_DEFAULT_SOURCES", "1") == "0":
+        return 0
+    p = conn.execute("SELECT default_sources_at FROM preferences WHERE user_id=?", (user_id,)).fetchone()
+    if not p or p["default_sources_at"]:
+        return 0
+    n = 0
+    for platform, token, company in DEFAULT_SOURCES:
+        n += conn.execute("""INSERT OR IGNORE INTO job_sources(id,user_id,platform,token,company,last_status,last_count,created_at)
+                             VALUES (?,?,?,?,?,?,?,?)""", (db.new_id(), user_id, platform, token, company, "suivie par défaut", 0, db.now())).rowcount
+    conn.execute("UPDATE preferences SET default_sources_at=? WHERE user_id=?", (db.now(), user_id))
+    return n
 
 
 def policy_for(conn, url: str):

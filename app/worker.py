@@ -28,7 +28,7 @@ import threading
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from . import db, files, llm, matching, robot
+from . import db, files, llm, matching, migrations, robot
 
 FAKE = os.environ.get("CANDIPILOT_FAKE_ROBOT") == "1"
 ROBOT = "simule" if FAKE else (os.environ.get("CANDIPILOT_ROBOT") or "extension")
@@ -549,6 +549,7 @@ def _scheduler_loop() -> None:
                 ready = FAKE or p["jobteaser_status"] == "connected"     # jamais avec le compte d'un autre
                 if not (due and db.jload(p["metiers"], [])):
                     continue
+                migrations.ensure_default_sources(c, p["user_id"])
                 has_sources = c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (p["user_id"],)).fetchone()
                 if has_sources:
                     enqueue(c, p["user_id"], "discover")         # plateformes de recrutement (serveur)

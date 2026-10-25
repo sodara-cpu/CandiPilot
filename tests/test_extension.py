@@ -46,7 +46,7 @@ def until(fn, timeout=60, every=0.5):
 
 tmp = tempfile.mkdtemp()
 env = {**{k: v for k, v in os.environ.items() if k not in ("CANDIPILOT_FAKE_ROBOT", "DATABASE_URL")},
-       "CANDIPILOT_ROBOT": "extension", "CANDIPILOT_TEST_PORTAL": "1", "CANDIPILOT_DATA": tmp}
+       "CANDIPILOT_ROBOT": "extension", "CANDIPILOT_DEFAULT_SOURCES": "0", "CANDIPILOT_TEST_PORTAL": "1", "CANDIPILOT_DATA": tmp}
 server = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)], env=env, cwd=str(ROOT),
                           stdout=open(Path(tmp) / "server.log", "w"), stderr=subprocess.STDOUT)
 

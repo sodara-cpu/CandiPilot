@@ -62,7 +62,7 @@ check(fingerprint("Acme", "Finance Intern (H/F)", "Paris, France") == fingerprin
 
 # 2. Serveur avec de fausses API de plateformes
 env = {**{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "ANTHROPIC_API_KEY")}, "CANDIPILOT_FAKE_ROBOT": "1",
-       "CANDIPILOT_FAKE_LLM": "1",
+       "CANDIPILOT_FAKE_LLM": "1", "CANDIPILOT_DEFAULT_SOURCES": "0",
        "CANDIPILOT_DATA": tempfile.mkdtemp(), "CANDIPILOT_ATS_BASE": BASE + "/fake-ats"}
 srv = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)], env=env, cwd=str(ROOT),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
