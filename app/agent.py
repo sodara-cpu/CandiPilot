@@ -79,6 +79,8 @@ def status(c, uid: str) -> dict:
             # Page de l'extension sur le Chrome Web Store, une fois publiée : installation en un clic.
             "store_url": os.environ.get("CANDIPILOT_EXTENSION_URL", ""),
             "version": t["version"] if t else "", "portal": p["jobteaser_url"] or robot.DEFAULT_PORTAL,
+            # Dernière version de l'extension (téléchargeable) : l'appli propose la mise à jour si l'installée est plus ancienne.
+            "latest": json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))["version"],
             "sites": [{"key": k, "name": n, **sites.get(k, {"connected": None})} for k, n in SITES.items()]}
 
 

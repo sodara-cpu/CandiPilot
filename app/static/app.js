@@ -844,6 +844,24 @@ const extensionInstalled = () => !!document.documentElement.dataset.candipilotEx
 new MutationObserver(() => { if (document.getElementById("sitesCard") && extensionInstalled()) route(true); })
   .observe(document.documentElement, { attributes: true, attributeFilter: ["data-candipilot-extension"] });
 
+// Versions « 0.4.0 » comparées nombre par nombre.
+const olderThan = (a, b) => { const x = (a || "0").split(".").map(Number), y = (b || "0").split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
+
+// Mise à jour de l'extension (version de test, hors Chrome Web Store) : toujours accessible.
+function extensionUpdate(ag) {
+  const installed = document.documentElement.dataset.candipilotExtension || ag.version;
+  const steps = `<ol class="install" style="margin-top:8px">
+      <li><a class="btn btn-primary btn-sm" href="/extension.zip">Télécharger la version ${esc(ag.latest)}</a> puis double-clique sur le fichier pour le décompresser.</li>
+      <li>Remplace l'ancien dossier <code>candipilot-extension</code> par le nouveau (même emplacement).</li>
+      <li>Dans Chrome, ouvre <code>chrome://extensions</code> et clique <b>↻ Recharger</b> sur CandiPilot.</li></ol>`;
+  if (ag.store_url) return "";                       // installée depuis le Store : mises à jour automatiques
+  if (installed && ag.latest && olderThan(installed, ag.latest))
+    return `<div class="blk" style="display:block"><b>Mise à jour disponible : ${esc(installed)} → ${esc(ag.latest)}</b>
+      <div class="hint">Nouveautés : candidature sur le site des entreprises, recherche plus rapide.</div>${steps}</div>`;
+  return `<details class="adv"><summary>Extension ${esc(installed || "")} — réinstaller ou mettre à jour</summary>${steps}</details>`;
+}
+
 function sitesCard(ag) {
   if (ag.robot !== "extension") return `<section class="card pad"><h2>Robot</h2><p class="sub" style="margin:4px 0 0;font-size:14px">${ag.robot === "simule" ? "Mode démonstration : robot simulé, aucune vraie candidature." : "Robot local : il utilise le navigateur de la machine qui héberge CandiPilot."}</p></section>`;
   const installed = extensionInstalled() || ag.linked;
@@ -857,7 +875,8 @@ function sitesCard(ag) {
         <b>${esc(x.name)}</b><span class="sub">${x.connected ? "connecté" : x.connected === false ? esc(x.detail || "non connecté") : "pas encore vérifié"}</span>
         ${x.connected ? "" : `<a class="btn btn-ghost btn-sm" href="${esc(x.key === "jobteaser" && ag.portal ? ag.portal + "/fr/job-offers" : SITE_LOGIN[x.key])}" target="_blank" rel="noopener">Se connecter</a>`}</li>`).join("")}</ul>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-ghost" id="recheck" ${ag.linked ? "" : "disabled"}>J'ai fini de me connecter : vérifier</button>
-        <span class="hint">Connecte-toi normalement sur chaque site, dans un onglet de ce navigateur, puis clique « vérifier ».</span></div>`
+        <span class="hint">Connecte-toi normalement sur chaque site, dans un onglet de ce navigateur, puis clique « vérifier ».</span></div>
+      ${extensionUpdate(ag)}`
     : ag.store_url ? `<div class="installone">
         <a class="btn btn-ai" href="${esc(ag.store_url)}" target="_blank" rel="noopener">Ajouter à Chrome — gratuit</a>
         <span class="hint">1 clic sur « Ajouter à Chrome », puis reviens ici : l'extension se relie toute seule à ton compte.</span></div>`
