@@ -136,18 +136,6 @@ def consume_reset(conn, token: str):
     return r["user_id"]
 
 
-def mail_config() -> dict:
-    """Réglages d'envoi réellement utilisés, sans les secrets (panneau du propriétaire)."""
-    env = os.environ.get
-    key, pwd = env("CANDIPILOT_BREVO_API_KEY", "").strip(), env("CANDIPILOT_SMTP_PASSWORD", "")
-    mask = lambda v: (v[:8] + "…" + f" ({len(v)} caractères)") if v else "(vide)"
-    name, sender = _sender()
-    return {"method": "API Brevo" if key else "SMTP" if env("CANDIPILOT_SMTP_HOST") else "aucune (liens écrits dans le journal)",
-            "brevo_api_key": mask(key), "smtp_host": env("CANDIPILOT_SMTP_HOST", ""), "smtp_port": env("CANDIPILOT_SMTP_PORT", "587"),
-            "smtp_user": env("CANDIPILOT_SMTP_USER", ""), "smtp_password": mask(pwd) if pwd else "(vide)",
-            "smtp_password_spaces": pwd != pwd.strip() or " " in pwd, "sender": f"{name} <{sender}>"}
-
-
 def send_mail_logged(to: str, subject: str, body: str) -> None:
     """Envoie et écrit le résultat dans le journal du serveur (onglet Logs de Render)."""
     try:

@@ -55,8 +55,7 @@ with sync_playwright() as p:
 
     # Étape 2
     page.get_by_role("link", name="Y aller →").click()
-    page.locator("form.upform[data-type=cv] input[type=file]").set_input_files(str(PDF))
-    page.locator("form.upform[data-type=cv] button[type=submit]").click()
+    page.locator("form.upform[data-type=cv] input[type=file]").set_input_files(str(PDF))   # l'import part tout seul
     expect(page.locator("#toast")).to_contain_text("CV importé")
     expect(banner).to_contain_text("le choix de ta lettre")
     page.get_by_role("button", name="Une lettre adaptée à chaque offre").click()
@@ -137,7 +136,7 @@ with sync_playwright() as p:
     print("✓ lancement → 2 envoyées avec preuve")
 
     page.goto(BASE + "/#/")
-    expect(page.get_by_role("heading", name="Ton parcours est terminé")).to_be_visible()
+    expect(page.locator(".tile").first).to_contain_text("2")     # accueil : 2 candidatures envoyées
     page.get_by_role("link", name="Candidatures", exact=True).click()
     expect(page.get_by_role("heading", name="Mes candidatures")).to_be_visible()
     page.get_by_role("link", name="Toutes les offres", exact=True).click()

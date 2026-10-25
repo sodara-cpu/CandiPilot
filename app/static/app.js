@@ -7,6 +7,14 @@ let pollTimer = null;
 let pollMs = 0;
 let GUIDE = null;            // parcours du candidat (/api/guide)
 
+// Apparence : automatique (réglage de l'ordinateur), claire ou sombre — mémorisée sur cet appareil.
+const getTheme = () => { try { return localStorage.getItem("cp_theme") || "auto"; } catch { return "auto"; } };
+function setTheme(t) {
+  if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("cp_theme", t); } catch { /* navigation privée */ }
+}
+setTheme(getTheme());
+
 // ---------- utilitaires ----------
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -284,34 +292,43 @@ function resetView() {
 // ---------- accueil ----------
 async function dashboardView() {
   const d = await api("/api/dashboard");
-  const s = d.stats, cp = d.copilot;
-  const max = Math.max(1, ...d.chart.map((w) => w.confirmed + w.pending));
+  const cp = d.copilot, n = d.stats.counts || {};
   const running = cp.jobs.find((j) => j.statut === "en_cours" || j.statut === "en_attente");
-  const JOBN = { search: "Recherche des offres", prepare: "Préparation d'un dossier", submit: "Envoi d'une candidature", verify: "Vérification d'un envoi" };
+  const JOBN = { search: "Recherche des offres", prepare: "Préparation d'un dossier", submit: "Envoi d'une candidature", verify: "Vérification d'un envoi", check_sites: "Vérification de tes sites" };
+  const sent = n.confirmee || 0, inProgress = (n.preparation || 0) + (n.soumission || 0) + (n.incertaine || 0),
+    action = (n.a_valider || 0) + (n.echec || 0);
+  const tile = (href, label, value, hint, cls = "") => `<a class="card pad tile ${cls}" href="${href}">
+      <span class="label">${label}</span><span class="value">${value}</span><span class="note">${hint}</span></a>`;
+  // « À faire » : uniquement ce qui attend une action de l'utilisateur.
+  const todo = [];
+  d.to_validate.slice(0, 4).forEach((a) => todo.push(`<a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)} · dossier prêt</div></span>${appState(a)}${svg("chev", 18)}</a>`));
+  if (n.echec) todo.push(`<a class="item" href="#/envoi"><span class="dot-ic err">!</span><span class="grow"><div class="t">${n.echec} candidature${n.echec > 1 ? "s n'ont" : " n'a"} pas pu partir</div><div class="s">Voir la raison et reprendre</div></span>${svg("chev", 18)}</a>`);
+  if (n.incertaine) todo.push(`<a class="item" href="#/envoi"><span class="dot-ic warn">?</span><span class="grow"><div class="t">${n.incertaine} envoi${n.incertaine > 1 ? "s" : ""} à vérifier</div><div class="s">La confirmation n'a pas été reçue</div></span>${svg("chev", 18)}</a>`);
+  if (GUIDE?.current === null && GUIDE.next && !todo.length) todo.push(`<a class="item" href="${GUIDE.next.href}"><span class="dot-ic">→</span><span class="grow"><div class="t">${esc(GUIDE.next.label)}</div><div class="s">${esc(GUIDE.next.help)}</div></span>${svg("chev", 18)}</a>`);
   shell("home", `
     <header class="head">
       <div class="titles"><h1>Bonjour ${esc(ME.first_name || "")} 👋</h1>
-        <p class="sub" style="margin:4px 0 0">Ton copilote continue de chercher les meilleures opportunités pour toi.</p></div>
+        <p class="sub" style="margin:4px 0 0">${GUIDE?.current === null ? "Ton copilote continue de chercher les meilleures opportunités pour toi." : "Encore quelques étapes et ton copilote se met au travail."}</p></div>
       <button class="bell" id="bell" aria-label="Notifications">${svg("bell", 20)}${d.unread ? '<span class="pip"></span>' : ""}</button>
-
     </header>
-    ${guideChecklist()}
+    ${GUIDE?.current !== null ? guideChecklist() : ""}
     ${cp.fake ? `<div class="banner"><span class="badge b-amber">Robot simulé</span> Mode démonstration : aucune candidature réelle n'est envoyée.</div>` : ""}
-    <section class="grid g4">
-      <div class="card pad stat"><div class="label">Offres analysées</div><div class="value">${s.offers.toLocaleString("fr-FR")}</div><div class="note ${s.offers_week ? "up" : ""}">+${s.offers_week} cette semaine</div></div>
-      <div class="card pad stat"><div class="label">Correspondent à ton profil</div><div class="value">${s.matching}</div><div class="note">dont ${s.matching_high} au-dessus de 85 %</div></div>
-      <div class="card pad stat"><div class="label">Candidatures envoyées</div><div class="value">${s.sent}</div><div class="note">envoi confirmé · ${s.pending} en attente</div></div>
-      <div class="card pad stat hero" onclick="location.hash='#/envoi'"><div class="label">Prêts à valider</div><div class="value">${s.to_validate}</div><div class="note" style="font-weight:600">Voir les dossiers →</div></div>
+    <section class="grid g3" aria-label="Mes candidatures">
+      ${tile("#/candidatures", "Envoyées", sent, "avec preuve de réception")}
+      ${tile("#/envoi", "En cours", inProgress, inProgress ? "le robot travaille" : "rien en cours")}
+      ${tile("#/envoi", "Action requise", action, action ? "à toi de jouer →" : "rien à faire", action ? "hero" : "")}
     </section>
     <section class="grid g2">
+      <div class="card pad">
+        <div class="spread" style="margin-bottom:8px"><h2>À faire</h2>${todo.length ? `<span class="badge b-violet">${todo.length}</span>` : ""}</div>
+        ${todo.length ? todo.join("") : `<div class="empty">Rien à faire pour l'instant : ton copilote s'occupe du reste.</div>`}
+      </div>
       <div class="card pad copilot stack">
         <div class="spread"><div><h2>Ton copilote</h2><div class="sub" style="font-size:13px">${cp.last_search_at ? "Dernière recherche " + ago(cp.last_search_at) : "Pas encore de recherche"}</div></div>
           <span class="badge" style="background:${cp.paused ? "rgba(255,255,255,.12)" : "rgba(18,184,154,.18)"};color:${cp.paused ? "#fff" : "#5EE6C8"}"><span class="dot" style="background:${cp.paused ? "#aaa" : "#12B89A"}"></span>${cp.paused ? "En pause" : "Actif"}</span></div>
         <div>
           ${running ? `<div class="task"><span class="tick"><span class="spin"></span></span>${esc(JOBN[running.type] || running.type)}<span class="meta">${esc(running.progress || (running.statut === "en_attente" ? "En file" : "En cours"))}</span></div>` : ""}
-          <div class="task"><span class="tick">${svg("tick", 14, 2.2)}</span>Recherche automatique des offres<span class="meta">${cp.paused ? "Suspendue" : "Toutes les " + cp.every_hours + " h"}</span></div>
-          <div class="task"><span class="tick">${svg("tick", 14, 2.2)}</span>Vérification des confirmations<span class="meta">Après chaque envoi</span></div>
-          ${cp.jobs.filter((j) => j !== running).slice(0, 1).map((j) => `<div class="task"><span class="tick">${svg("tick", 14, 2.2)}</span>${esc(JOBN[j.type] || j.type)}<span class="meta">${j.statut === "erreur" ? "Erreur" : "Terminé"} · ${ago(j.updated_at)}</span></div>`).join("")}
+          <div class="task"><span class="tick">${svg("tick", 14, 2.2)}</span>Recherche automatique<span class="meta">${cp.paused ? "Suspendue" : "Toutes les " + cp.every_hours + " h"}</span></div>
         </div>
         <div class="row" style="flex-wrap:wrap;margin-top:auto">
           <button class="btn btn-ghost" id="pause">${cp.paused ? "Reprendre" : "Mettre en pause"}</button>
@@ -319,42 +336,23 @@ async function dashboardView() {
           <a class="btn btn-ghost" href="#/criteres">Modifier les critères</a>
         </div>
       </div>
-      <div class="card pad">
-        <div class="spread"><div><h2>Candidatures envoyées</h2><div class="sub" style="font-size:13px">8 dernières semaines</div></div>
-          <div class="legend"><span><i style="background:#5A4DF5"></i>Envoi confirmé</span><span><i style="background:#C9D3FF"></i>En attente</span></div></div>
-        <div class="chart" role="img" aria-label="Candidatures envoyées par semaine">
-          ${d.chart.map((w) => { const t = w.confirmed + w.pending; return `<div class="col"><span class="n">${t || ""}</span>
-            <div class="bar" style="height:${(t / max) * 140}px" title="${w.week} : ${w.confirmed} confirmée(s), ${w.pending} en attente"><div class="p" style="flex:${w.pending}"></div><div class="c" style="flex:${w.confirmed}"></div></div>
-            <span class="w">${w.week}</span></div>`; }).join("")}
-        </div>
-      </div>
-    </section>
-    <section class="grid g2">
-      <div class="card pad">
-        <div class="spread" style="margin-bottom:8px"><h2>Candidatures à valider</h2><span class="badge b-violet">${s.to_validate} dossier${s.to_validate > 1 ? "s" : ""}</span></div>
-        ${d.to_validate.length ? d.to_validate.map((a) => `
-          <a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)}${a.localisation ? " · " + esc(a.localisation) : ""}</div></span>${appState(a)}${svg("chev", 18)}</a>`).join("")
-          : `<div class="empty">Aucun dossier à valider. Sélectionne une offre recommandée ci-dessous.</div>`}
-      </div>
-      <div class="card pad">
-        <div class="spread" style="margin-bottom:8px"><h2>Activité récente</h2><button class="btn btn-quiet btn-sm" id="allEvents">Tout voir</button></div>
-        ${d.events.length ? d.events.map(eventRow).join("") : `<div class="empty">Rien pour le moment.</div>`}
-      </div>
     </section>
     <section class="stack">
-      <div class="spread"><h2 style="font-size:19px">Offres recommandées</h2><a href="#/offres" style="font-weight:600;font-size:14px">Tout voir</a></div>
-      <div class="grid g3">
-        ${d.recommended.length ? d.recommended.map((a) => `
+      <div class="spread"><h2 style="font-size:19px">Offres pertinentes</h2><a href="#/offres" style="font-weight:600;font-size:14px">Toutes les offres</a></div>
+      ${d.recommended.length ? `<div class="grid g3">${d.recommended.map((a) => `
           <div class="card pad stack">
-            <div class="spread">${mono(a.entreprise, 44)}<span class="badge b-violet">${a.score} % match</span></div>
+            <div class="spread">${mono(a.entreprise, 44)}<span class="badge b-violet">${a.score} %</span></div>
             <div><div style="font-weight:600;font-size:17px">${esc(a.poste)}</div><div class="sub">${esc(a.entreprise)}</div></div>
             <div class="chips">${a.localisation ? `<span class="badge b-mute">${esc(a.localisation)}</span>` : ""}${a.contrat ? `<span class="badge b-mute">${esc(a.contrat)}</span>` : ""}${a.start_date ? `<span class="badge b-mute">${esc(monthLabel(a.start_date))}</span>` : ""}</div>
             <button class="btn btn-ghost" data-select="${a.id}">Sélectionner cette offre</button>
-          </div>`).join("") : `<div class="card empty">Aucune offre pour l'instant. Renseigne tes critères puis lance une recherche.</div>`}
-      </div>
+          </div>`).join("")}</div>` : `<div class="card empty">Aucune offre pour l'instant. Renseigne tes critères puis lance une recherche.</div>`}
+    </section>
+    <section class="card pad">
+      <div class="spread" style="margin-bottom:8px"><h2>Activité récente</h2><button class="btn btn-quiet btn-sm" id="allEvents">Tout voir</button></div>
+      ${d.events.length ? d.events.slice(0, 5).map(eventRow).join("") : `<div class="empty">Rien pour le moment.</div>`}
     </section>`);
   document.getElementById("pause").onclick = () => act(() => api(`/api/copilot/${cp.paused ? "resume" : "pause"}`, { method: "POST" })).then(route);
-  document.getElementById("searchNow").onclick = () => act(() => api("/api/search", { method: "POST" }), "Recherche lancée : une fenêtre du robot peut s'ouvrir.").then(route);
+  document.getElementById("searchNow").onclick = () => act(() => api("/api/search", { method: "POST" }), "Recherche lancée.").then(route);
   document.getElementById("bell").onclick = document.getElementById("allEvents").onclick = showEvents;
   $app.querySelectorAll("[data-select]").forEach((b) => b.onclick = () => selectOffer(b.dataset.select, true));
   schedulePoll(running ? 3000 : 15000);
@@ -387,11 +385,11 @@ async function applicationView(id) {
   const isJT = a.apply_type === "jobteaser";
 
   let banner = "";
-  if (a.statut === "confirmee") banner = `<section class="card pad pop" style="background:#E2F6F1;border-color:#BDEBDF"><b style="color:#08584A">Candidature envoyée</b><div style="font-size:14px;color:#0B6B59">Preuve : ${esc(a.preuve)} · ${a.date_envoi ? new Date(a.date_envoi).toLocaleString("fr-FR") : ""}</div></section>`;
-  else if (a.statut === "soumission") banner = `<section class="card pad pop" style="background:#E9F0FF;border-color:#C9D7FF"><b style="color:#1D3F9E"><span class="spin"></span> Envoi en cours</b><div style="font-size:14px;color:#2453C9">${a.mode === "assisted" ? "Le robot a ouvert le formulaire : vérifie-le et clique « Postuler maintenant » dans sa fenêtre." : "Le robot remplit et envoie le formulaire."} Elle passera en « Envoyée » seulement quand JobTeaser confirmera la réception.</div></section>`;
-  else if (a.statut === "preparation") banner = `<section class="card pad" style="background:#E9F0FF;border-color:#C9D7FF"><b style="color:#1D3F9E"><span class="spin"></span> Préparation en cours</b><div style="font-size:14px;color:#2453C9">${esc(a.job?.progress || "Le robot rédige la lettre et lit le formulaire de candidature.")}</div></section>`;
-  else if (a.statut === "echec") banner = `<section class="card pad" style="background:#FDECEA;border-color:#F5C2BC"><b style="color:#912018">Échec</b><div style="font-size:14px;color:#B42318">${esc(a.detail)}</div></section>`;
-  else if (a.statut === "incertaine") banner = `<section class="card pad" style="background:#FFF3DD;border-color:#F6E2B8"><b style="color:#8A5300">Envoi incertain</b><div style="font-size:14px;color:#8A5300">${esc(a.detail)} — lance une vérification ou marque-la comme envoyée si tu as la confirmation.</div></section>`;
+  if (a.statut === "confirmee") banner = `<section class="card pad pop" style="background:var(--green-bg);border-color:var(--line-2)"><b style="color:var(--green)">Candidature envoyée</b><div style="font-size:14px;color:var(--green)">Preuve : ${esc(a.preuve)} · ${a.date_envoi ? new Date(a.date_envoi).toLocaleString("fr-FR") : ""}</div></section>`;
+  else if (a.statut === "soumission") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Envoi en cours</b><div style="font-size:14px;color:var(--blue)">${a.mode === "assisted" ? "Le robot a ouvert le formulaire : vérifie-le et clique « Postuler maintenant » dans sa fenêtre." : "Le robot remplit et envoie le formulaire."} Elle passera en « Envoyée » seulement quand JobTeaser confirmera la réception.</div></section>`;
+  else if (a.statut === "preparation") banner = `<section class="card pad" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Préparation en cours</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "Le robot rédige la lettre et lit le formulaire de candidature.")}</div></section>`;
+  else if (a.statut === "echec") banner = `<section class="card pad" style="background:var(--red-bg);border-color:var(--line-2)"><b style="color:var(--red)">Échec</b><div style="font-size:14px;color:var(--red)">${esc(a.detail)}</div></section>`;
+  else if (a.statut === "incertaine") banner = `<section class="card pad" style="background:var(--amber-bg);border-color:var(--line-2)"><b style="color:var(--amber)">Envoi incertain</b><div style="font-size:14px;color:var(--amber)">${esc(a.detail)} — lance une vérification ou marque-la comme envoyée si tu as la confirmation.</div></section>`;
 
   shell("send", `
     <a href="#/envoi" class="btn btn-quiet" style="align-self:flex-start;padding:0 8px">${svg("back", 16, 2)}Récapitulatif d'envoi</a>
@@ -547,27 +545,83 @@ async function applicationsView() {
   schedulePoll(apps.some((a) => ["preparation", "soumission"].includes(a.statut)) ? 4000 : 0);
 }
 
+// ---------- liste d'offres : recherche, filtres, tri, pages de 10 ----------
+const PAGE_SIZE = 10;
+const OB_FILTERS = [["all", "Toutes"], ["selected", "Sélectionnées"], ["todo", "À sélectionner"], ["easy", "Candidature simplifiée"], ["top", "Score ≥ 70 %"]];
+const OB_SORTS = [["score", "Meilleur score"], ["recent", "Plus récentes"], ["start", "Début le plus proche"], ["company", "Entreprise A → Z"]];
+const scoreBadge = (o) => `<span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}">${o.score} %</span>`;
+
+function obState(key) {
+  const base = { q: "", f: "all", sort: "score", page: 1 };
+  try { return { ...base, ...JSON.parse(sessionStorage.getItem("ob_" + key) || "{}") }; } catch { return base; }
+}
+
+function offerBrowser(key) {
+  return `<div class="ob" id="ob_${key}">
+    <div class="ob-tools">
+      <input type="search" class="ob-q" placeholder="Rechercher un poste, une entreprise, un lieu…" aria-label="Rechercher dans les offres">
+      <select class="ob-sort" aria-label="Trier les offres">${OB_SORTS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>
+    </div>
+    <div class="ob-f" role="group" aria-label="Filtrer les offres">${OB_FILTERS.map(([k, l]) => `<button type="button" class="pill" data-f="${k}">${l}</button>`).join("")}</div>
+    <div class="ob-body"></div><nav class="ob-pager" aria-label="Pages d'offres"></nav></div>`;
+}
+
+function bindOfferBrowser(key, offers, { head, row, empty, after }) {
+  const root = document.getElementById("ob_" + key);
+  if (!root) return;
+  const st = obState(key), q = root.querySelector(".ob-q"), sort = root.querySelector(".ob-sort");
+  q.value = st.q; sort.value = st.sort;
+  const by = { score: (a, b) => b.score - a.score, recent: (a, b) => (b.created_at || "").localeCompare(a.created_at || ""),
+    start: (a, b) => (a.start_date || "9999").localeCompare(b.start_date || "9999"), company: (a, b) => a.entreprise.localeCompare(b.entreprise, "fr") };
+  const keep = { selected: (o) => o.selected, todo: (o) => !o.selected, easy: (o) => o.apply_type === "jobteaser", top: (o) => o.score >= 70 };
+  const draw = () => {
+    try { sessionStorage.setItem("ob_" + key, JSON.stringify(st)); } catch { /* navigation privée */ }
+    root.querySelectorAll("[data-f]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.f === st.f)));
+    const words = st.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const list = offers.filter((o) => words.every((w) => `${o.poste} ${o.entreprise} ${o.localisation} ${o.contrat}`.toLowerCase().includes(w)))
+      .filter(keep[st.f] || (() => true)).sort(by[st.sort] || by.score);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    st.page = Math.min(Math.max(1, st.page), pages);
+    const shown = list.slice((st.page - 1) * PAGE_SIZE, st.page * PAGE_SIZE);
+    root.querySelector(".ob-body").innerHTML = shown.length
+      ? `<div class="hint ob-count">${list.length} offre${list.length > 1 ? "s" : ""}${list.length !== offers.length ? ` sur ${offers.length}` : ""}</div>
+         <div class="card tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${shown.map(row).join("")}</tbody></table></div>`
+      : `<div class="empty">${offers.length ? "Aucune offre ne correspond à ces filtres." : empty}</div>`;
+    root.querySelector(".ob-pager").innerHTML = pages > 1 ? `<button class="btn btn-ghost btn-sm" data-p="${st.page - 1}" ${st.page === 1 ? "disabled" : ""}>← Précédentes</button>
+      <span class="hint">Page ${st.page} sur ${pages}</span><button class="btn btn-ghost btn-sm" data-p="${st.page + 1}" ${st.page === pages ? "disabled" : ""}>Suivantes →</button>` : "";
+    after?.(root);
+  };
+  let t;
+  q.oninput = () => { clearTimeout(t); t = setTimeout(() => { st.q = q.value; st.page = 1; draw(); }, 200); };
+  sort.onchange = () => { st.sort = sort.value; st.page = 1; draw(); };
+  root.querySelector(".ob-f").onclick = (e) => { const b = e.target.closest("[data-f]"); if (b) { st.f = b.dataset.f; st.page = 1; draw(); } };
+  root.querySelector(".ob-pager").onclick = (e) => { const b = e.target.closest("[data-p]"); if (b && !b.disabled) { st.page = +b.dataset.p; draw(); root.scrollIntoView({ block: "start", behavior: "smooth" }); } };
+  draw();
+}
+
 // ---------- offres (CRUD) ----------
 async function offersView() {
-  const q = sessionStorage.getItem("cp_q") || "";
-  const offers = await api(`/api/offers?q=${encodeURIComponent(q)}`);
+  const offers = await api("/api/offers");
   shell("offers", `
-    <header class="head"><div class="titles"><h1>Offres</h1><p class="sub" style="margin:4px 0 0">${offers.length} offre${offers.length > 1 ? "s" : ""}, classées par compatibilité avec ton profil.</p></div>
+    <header class="head"><div class="titles"><h1>Offres</h1><p class="sub" style="margin:4px 0 0">Toutes les offres trouvées pour toi, classées par compatibilité avec ton profil.</p></div>
       <button class="btn btn-ghost" id="searchNow">Lancer une recherche</button><button class="btn btn-primary" id="addOffer">Ajouter une offre</button></header>
-    <input type="text" id="q" placeholder="Filtrer par poste, entreprise ou lieu…" value="${esc(q)}" aria-label="Filtrer les offres">
-    <div class="card tablewrap"><table><thead><tr><th>Poste</th><th>Entreprise</th><th>Lieu</th><th>Début</th><th>Match</th><th>Statut</th><th></th></tr></thead><tbody>
-      ${offers.map((o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${esc(o.source)}</div></td>
+    ${offerBrowser("all")}`);
+  bindOfferBrowser("all", offers, {
+    head: "<th>Poste</th><th>Entreprise</th><th>Lieu</th><th>Début</th><th>Match</th><th>Statut</th><th></th>",
+    empty: "Aucune offre. Lance une recherche ou ajoute une offre à la main.",
+    row: (o) => `<tr><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée" : "Site de l'entreprise"} · ${esc(o.source)}</div></td>
         <td>${esc(o.entreprise)}</td><td class="sub">${esc(o.localisation)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td>
-        <td><span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}">${o.score} %</span></td><td>${o.statut ? statusBadge(o.statut) : ""}</td>
+        <td>${scoreBadge(o)}</td><td>${o.statut ? statusBadge(o.statut) : ""}</td>
         <td style="white-space:nowrap">${selectBtn(o)}${o.application_id ? `<a class="btn btn-quiet btn-sm" href="#/candidature/${o.application_id}">Ouvrir</a>` : ""}<button class="btn btn-quiet btn-sm" data-edit="${o.id}">Modifier</button>
-          ${["soumission", "confirmee"].includes(o.statut) ? "" : `<button class="btn btn-quiet btn-sm" data-del="${o.id}" style="color:var(--red)">Supprimer</button>`}</td></tr>`).join("") || '<tr><td colspan="7" class="empty">Aucune offre. Lance une recherche ou ajoute une offre à la main.</td></tr>'}
-    </tbody></table></div>`);
-  let t; document.getElementById("q").oninput = (e) => { clearTimeout(t); t = setTimeout(() => { sessionStorage.setItem("cp_q", e.target.value); route().then(() => { const i = document.getElementById("q"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }); }, 300); };
+          ${["soumission", "confirmee"].includes(o.statut) ? "" : `<button class="btn btn-quiet btn-sm" data-del="${o.id}" style="color:var(--red)">Supprimer</button>`}</td></tr>`,
+    after: () => {
+      bindSelect();
+      $app.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => offerForm(offers.find((o) => o.id === b.dataset.edit)));
+      $app.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => { if (confirm("Supprimer cette offre ?")) act(() => api(`/api/offers/${b.dataset.del}`, { method: "DELETE" }), "Offre supprimée.").then(route); });
+    },
+  });
   document.getElementById("addOffer").onclick = () => offerForm();
-  bindSelect();
   document.getElementById("searchNow").onclick = () => act(() => api("/api/search", { method: "POST" }), "Recherche lancée : les offres arrivent dans quelques minutes.").then(route);
-  $app.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => offerForm(offers.find((o) => o.id === b.dataset.edit)));
-  $app.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => { if (confirm("Supprimer cette offre ?")) act(() => api(`/api/offers/${b.dataset.del}`, { method: "DELETE" }), "Offre supprimée.").then(route); });
 }
 
 function offerForm(o = null) {
@@ -596,6 +650,14 @@ const selectBtn = (o) => !o.application_id || o.launched || ["soumission", "conf
 const bindSelect = () => $app.querySelectorAll("[data-sel]").forEach((b) => b.onclick = () => selectOffer(b.dataset.sel, b.dataset.on === "1"));
 
 // ---------- étape 3 : critères et offres ----------
+const CONTRACTS = [["stage", "Stage"], ["alternance", "Alternance"], ["cdd", "CDD"], ["cdi", "CDI"], ["vie", "VIE"], ["graduate", "Graduate programme"]];
+const SUGGEST = {
+  metiers: ["M&A", "Private equity", "Private debt", "Corporate finance", "Analyste financier", "Asset management", "Transaction services",
+    "Contrôle de gestion", "Audit", "Risk management", "Trading", "Structured finance", "Leveraged finance", "Equity research",
+    "Credit analyst", "Compliance", "Data analyst", "Marketing", "Consulting", "Business developer", "Ressources humaines"],
+  zones: ["Paris", "Île-de-France", "La Défense", "Lyon", "Marseille", "Lille", "Bordeaux", "Toulouse", "Nantes", "Nice",
+    "Strasbourg", "Luxembourg", "Londres", "Genève", "Bruxelles", "Télétravail"],
+};
 async function prefsView() {
   const [p, offers, ag] = await Promise.all([api("/api/preferences"), api("/api/offers"), api("/api/agent/status")]);
   const lists = { metiers: [...p.metiers], zones: [...p.zones], contrats: [...p.contrats] };
@@ -607,47 +669,65 @@ async function prefsView() {
     ${sitesCard(ag)}
     <form class="card pad form" id="pf">
       <h2>Mes critères</h2>
-      ${[["metiers", "Métiers ciblés *", "ex. private debt, M&A, corporate finance"], ["zones", "Localisations", "ex. Paris, France — vide = partout"], ["contrats", "Types de contrat", "ex. stage, alternance"]].map(([k, l, ph]) => `
+      ${[["metiers", "Métiers ciblés *", "ex. M&A, private debt, contrôle de gestion"], ["zones", "Localisations", "ex. Paris — laisse vide pour partout"]].map(([k, l, ph]) => `
         <div class="f" style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">${l}
           <div class="chips" id="c_${k}"></div>
-          <input type="text" data-list="${k}" placeholder="${ph} — Entrée pour ajouter" aria-label="${l}"></div>`).join("")}
-      <div class="form two">
-        <label class="f">Disponible à partir du<input type="date" name="start_from" value="${esc(p.start_from)}"><span class="hint">Les offres qui commencent avant sont écartées.</span></label>
-        <label class="f">Score minimal pour retenir une offre<input type="number" name="min_score" min="0" max="100" value="${p.min_score}"></label>
-        <label class="f">Pages de résultats lues par mot-clé<input type="number" name="max_pages" min="1" max="10" value="${p.max_pages}"></label>
-        <label class="f">Recherche automatique toutes les (heures)<input type="number" name="search_every_hours" min="1" max="168" value="${p.search_every_hours}"></label>
-      </div>
-      <label class="check"><input type="checkbox" name="include_external" ${p.include_external ? "checked" : ""}> Inclure les offres à finir sur le site de l'entreprise (semi-assisté)</label>
+          <input type="text" data-list="${k}" list="dl_${k}" placeholder="${ph} — Entrée pour ajouter" aria-label="${l}" aria-describedby="err_${k}">
+          <span class="field-err" id="err_${k}" role="alert"></span></div>`).join("")}
+      <datalist id="dl_metiers">${SUGGEST.metiers.map((v) => `<option value="${esc(v)}">`).join("")}</datalist>
+      <datalist id="dl_zones">${SUGGEST.zones.map((v) => `<option value="${esc(v)}">`).join("")}</datalist>
+      <div class="f" style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">Types de contrat
+        <div class="ob-f" id="contrats" role="group" aria-label="Types de contrat">${CONTRACTS.map(([v, l]) => `<button type="button" class="pill" data-c="${v}" aria-pressed="${lists.contrats.includes(v)}">${l}</button>`).join("")}</div></div>
+      <label class="f" style="max-width:320px">Disponible à partir du<input type="date" name="start_from" value="${esc(p.start_from)}"><span class="hint">Les offres qui commencent avant sont écartées.</span></label>
+      <details class="adv"><summary>Réglages avancés</summary>
+        <div class="form two" style="margin-top:12px">
+          <label class="f">Score minimal pour retenir une offre<input type="number" name="min_score" min="0" max="100" value="${p.min_score}"></label>
+          <label class="f">Pages de résultats lues par mot-clé<input type="number" name="max_pages" min="1" max="10" value="${p.max_pages}"></label>
+          <label class="f">Recherche automatique toutes les (heures)<input type="number" name="search_every_hours" min="1" max="168" value="${p.search_every_hours}"></label>
+        </div>
+        <label class="check" style="margin-top:8px"><input type="checkbox" name="include_external" ${p.include_external ? "checked" : ""}> Inclure les offres à finir sur le site de l'entreprise (semi-assisté)</label>
+      </details>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-ghost" type="submit">Enregistrer</button>
         <button class="btn btn-primary" type="button" id="searchNow" ${searching ? "disabled" : ""}>${searching ? '<span class="spin"></span> Recherche en cours…' : "Rechercher des offres"}</button></div>
     </form>
     <section class="card pad stack">
       <div class="spread"><div><h2>Offres trouvées</h2><div class="sub" style="font-size:14px">${open.length} offre${open.length > 1 ? "s" : ""} · <b>${nSel} sélectionnée${nSel > 1 ? "s" : ""}</b></div></div>
         ${nSel ? `<a class="btn btn-primary" href="#/mode">Continuer : étape 4 →</a>` : ""}</div>
-      ${open.length ? `<div class="tablewrap"><table><thead><tr><th>Poste</th><th>Entreprise</th><th>Début</th><th>Match</th><th>Préparation</th><th></th></tr></thead><tbody>
-        ${open.map((o) => `<tr class="${o.selected ? "selrow" : ""}"><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée JobTeaser" : "Site de l'entreprise"}${o.localisation ? " · " + esc(o.localisation) : ""}</div></td>
-          <td>${esc(o.entreprise)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td>
-          <td><span class="badge ${o.score >= 85 ? "b-green" : o.score >= 50 ? "b-violet" : "b-mute"}">${o.score} %</span></td>
-          <td>${!o.selected ? "" : o.statut === "preparation" ? '<span class="badge b-blue"><span class="spin"></span>En cours</span>' : o.statut === "a_valider" ? '<span class="badge b-green">Prêt</span>' : statusBadge(o.statut)}</td>
-          <td style="white-space:nowrap">${selectBtn(o)}</td></tr>`).join("")}
-      </tbody></table></div>` : `<div class="empty">${searching ? "Recherche en cours : les offres arrivent dans quelques minutes." : "Aucune offre pour l'instant. Renseigne tes critères puis clique « Rechercher des offres »."}</div>`}
+      ${offerBrowser("crit")}
     </section>`);
-  const draw = (k) => { document.getElementById("c_" + k).innerHTML = lists[k].map((v, i) => `<span class="chip">${esc(v)}<button type="button" data-rm="${k}:${i}" aria-label="Retirer ${esc(v)}">×</button></span>`).join("") || '<span class="hint">Aucun</span>'; };
+  const draw = (k) => { if (k === "contrats") return; document.getElementById("c_" + k).innerHTML = lists[k].map((v, i) => `<span class="chip">${esc(v)}<button type="button" data-rm="${k}:${i}" aria-label="Retirer ${esc(v)}">×</button></span>`).join("") || '<span class="hint">Aucun</span>'; };
   Object.keys(lists).forEach(draw);
   $app.querySelectorAll("[data-list]").forEach((inp) => inp.onkeydown = (e) => {
     if (e.key === "Enter" || e.key === ",") { e.preventDefault(); const v = inp.value.trim(); if (v && !lists[inp.dataset.list].includes(v)) { lists[inp.dataset.list].push(v); draw(inp.dataset.list); } inp.value = ""; }
   });
   document.getElementById("pf").addEventListener("click", (e) => { const b = e.target.closest("[data-rm]"); if (!b) return; const [k, i] = b.dataset.rm.split(":"); lists[k].splice(+i, 1); draw(k); });
+  document.getElementById("contrats").onclick = (e) => {
+    const b = e.target.closest("[data-c]"); if (!b) return;
+    const v = b.dataset.c, i = lists.contrats.indexOf(v);
+    if (i >= 0) lists.contrats.splice(i, 1); else lists.contrats.push(v);
+    b.setAttribute("aria-pressed", String(i < 0));
+  };
   const save = async () => {
     $app.querySelectorAll("[data-list]").forEach((inp) => { const v = inp.value.trim(); if (v && !lists[inp.dataset.list].includes(v)) lists[inp.dataset.list].push(v); inp.value = ""; });
+    const err = document.getElementById("err_metiers");
+    if (!lists.metiers.length) { err.textContent = "Ajoute au moins un métier : c'est ce que le robot va chercher."; document.querySelector("[data-list=metiers]").focus(); throw new Error(); }
+    err.textContent = "";
     const f = new FormData(document.getElementById("pf"));
     const body = { ...lists, start_from: f.get("start_from") || "", min_score: +f.get("min_score"), max_pages: +f.get("max_pages"),
       search_every_hours: +f.get("search_every_hours"), include_external: f.get("include_external") === "on" };
     await act(() => api("/api/preferences", { method: "PUT", body }), "Critères enregistrés.");
   };
-  document.getElementById("pf").onsubmit = (e) => { e.preventDefault(); save().then(route); };
-  document.getElementById("searchNow").onclick = async () => { await save(); await act(() => api("/api/search", { method: "POST" }), "Recherche lancée : les offres arrivent dans quelques minutes. Aucun envoi."); route(); };
-  bindSelect();
+  document.getElementById("pf").onsubmit = (e) => { e.preventDefault(); save().then(route).catch(() => {}); };
+  document.getElementById("searchNow").onclick = async () => { try { await save(); } catch { return; } await act(() => api("/api/search", { method: "POST" }), "Recherche lancée : les offres arrivent dans quelques minutes. Aucun envoi."); route(); };
+  bindOfferBrowser("crit", open, {
+    head: "<th>Poste</th><th>Entreprise</th><th>Début</th><th>Match</th><th>Préparation</th><th></th>",
+    empty: searching ? "Recherche en cours : les offres arrivent dans quelques minutes." : "Aucune offre pour l'instant. Renseigne tes critères puis clique « Rechercher des offres ».",
+    row: (o) => `<tr class="${o.selected ? "selrow" : ""}"><td><a href="${esc(o.url)}" target="_blank" rel="noopener" style="font-weight:600;color:var(--ink)">${esc(o.poste)}</a><div class="hint">${o.apply_type === "jobteaser" ? "Candidature simplifiée JobTeaser" : "Site de l'entreprise"}${o.localisation ? " · " + esc(o.localisation) : ""}</div></td>
+          <td>${esc(o.entreprise)}</td><td class="sub">${esc(monthLabel(o.start_date))}</td><td>${scoreBadge(o)}</td>
+          <td>${!o.selected ? "" : o.statut === "preparation" ? '<span class="badge b-blue"><span class="spin"></span>En cours</span>' : o.statut === "a_valider" ? '<span class="badge b-green">Prêt</span>' : statusBadge(o.statut)}</td>
+          <td style="white-space:nowrap">${selectBtn(o)}</td></tr>`,
+    after: bindSelect,
+  });
   bindSites(ag);
   if (searching || open.some((o) => o.selected && o.statut === "preparation") || (ag.robot === "extension" && !ag.linked)) schedulePoll(4000);
 }
@@ -689,6 +769,27 @@ function bindSites(ag) {
   document.getElementById("recheck")?.addEventListener("click", () => act(() => api("/api/agent/check", { method: "POST" }), "Vérification demandée à l'extension…").then(() => schedulePoll(4000)));
 }
 
+// ---------- import du CV : on lit le CV et on propose de remplir le profil (validation par l'utilisateur) ----------
+async function uploadCv(file) {
+  const fd = new FormData(); fd.append("file", file); fd.append("type", "cv");
+  const d = await act(() => api("/api/documents", { method: "POST", body: fd }));
+  if (!d.is_default) await api(`/api/documents/${d.id}`, { method: "PATCH", body: { is_default: true } });
+  toast("CV importé : il sera utilisé pour tes candidatures.");
+  const { suggestions } = await api(`/api/documents/${d.id}/extract`, { method: "POST" }).catch(() => ({ suggestions: [] }));
+  if (!suggestions.length) return route();
+  modal(`<h2>On a lu ton CV</h2>
+    <p class="sub" style="margin:6px 0 12px">Coche ce que tu veux ajouter à ton profil. Rien n'est enregistré sans ton accord.</p>
+    <form id="cvf" class="stack" style="gap:8px">${suggestions.map((x) => `<label class="check cvsug"><input type="checkbox" name="${x.field}" ${x.current ? "" : "checked"}>
+      <span><b>${esc(x.label)}</b> : ${esc(x.value)}${x.current ? `<br><span class="hint">remplace « ${esc(x.current)} »</span>` : ""}</span></label>`).join("")}
+      <div class="row" style="justify-content:flex-end;margin-top:8px"><button type="button" class="btn btn-ghost" data-close>Plus tard</button><button class="btn btn-primary" type="submit">Ajouter à mon profil</button></div></form>`,
+    (el, close) => el.querySelector("#cvf").onsubmit = async (e) => {
+      e.preventDefault();
+      const body = Object.fromEntries(suggestions.filter((x) => e.target.elements[x.field].checked).map((x) => [x.field, x.value]));
+      if (Object.keys(body).length) { await act(() => api("/api/profile", { method: "PUT", body }), "Profil complété avec ton CV."); ME = await api("/api/auth/me"); }
+      close(); route();
+    });
+}
+
 // ---------- étape 1 : profil ----------
 async function profileView() {
   const p = await api("/api/profile");
@@ -697,19 +798,29 @@ async function profileView() {
   shell("profile", `
     <header class="head"><div class="titles"><h1>1. Mon profil</h1><p class="sub" style="margin:4px 0 0">Ces informations remplissent tes candidatures. Les champs marqués * sont obligatoires.</p></div>
       ${ME.owner ? '<button class="btn btn-ghost" id="importYaml" title="Importe config/profile.yaml du robot">Importer le profil du robot</button>' : ""}</header>
+    <section class="card pad cvquick">
+      <div><h2>Gagne du temps</h2><p class="sub" style="margin:2px 0 0;font-size:14px">Importe ton CV (PDF) : on remplit ton profil pour toi, tu vérifies.</p></div>
+      <label class="btn btn-primary">Importer mon CV<input type="file" id="cvQuick" accept="application/pdf" hidden></label>
+    </section>
     <form class="card pad form" id="prf">
-      <h2>Informations personnelles</h2>
+      <h2>L'essentiel</h2>
       <div class="form two">${field("first_name", "Prénom")}${field("last_name", "Nom")}
-        <label class="f">E-mail<input type="email" value="${esc(p.email)}" disabled><span class="hint">Modifiable dans <a href="#/compte">Mon compte</a>.</span></label>
-        ${field("phone", "Téléphone", "text", "+33…")}${field("linkedin", "LinkedIn", "url", "https://www.linkedin.com/in/…")}${field("location", "Ville", "text", "Paris, France")}
-        ${field("school", "École")}${field("program", "Programme")}</div>
-      <label class="f">Compétences<input type="text" name="competences" value="${esc(p.competences)}" placeholder="ex. Python, SQL, DCF, Excel, private debt"><span class="hint">Utilisées pour le calcul du % de compatibilité.</span></label>
-      <h2 style="margin-top:8px">Réponses aux formulaires</h2>
-      <div class="form two">${field("availability", "Date de disponibilité", "text", "Mars 2027")}${field("duration", "Durée du stage", "text", "6 mois")}
-        ${field("languages", "Langues", "text", "Français (natif), anglais (courant)")}${field("internship_agreement", "Convention de stage", "text", "Oui, fournie par l'école")}
-        <label class="f">Genre (demandé par JobTeaser) *<select name="gender" required><option value="">—</option>${["Homme", "Femme", "Autre"].map((g) => `<option ${p.gender === g ? "selected" : ""}>${g}</option>`).join("")}</select></label></div>
+        ${field("phone", "Téléphone", "tel", "+33…")}${field("availability", "Disponible à partir de", "text", "ex. Mars 2027")}
+        <label class="f">Genre (demandé par certains formulaires) *<select name="gender" required><option value="">—</option>${["Homme", "Femme", "Autre"].map((g) => `<option ${p.gender === g ? "selected" : ""}>${g}</option>`).join("")}</select></label>
+        <label class="f">E-mail<input type="email" value="${esc(p.email)}" disabled><span class="hint">Modifiable dans <a href="#/compte">Mon compte</a>.</span></label></div>
+      <details class="adv" ${["linkedin", "location", "school", "program", "competences", "duration", "languages", "internship_agreement"].some((k) => p[k]) ? "open" : ""}>
+        <summary>Plus d'informations (facultatif) : elles améliorent le classement des offres et les réponses aux formulaires</summary>
+        <div class="form two" style="margin-top:12px">
+          ${field("linkedin", "LinkedIn", "url", "https://www.linkedin.com/in/…")}${field("location", "Ville", "text", "Paris")}
+          ${field("school", "École")}${field("program", "Programme")}
+          ${field("duration", "Durée du stage", "text", "6 mois")}${field("languages", "Langues", "text", "Français (natif), anglais (courant)")}
+          ${field("internship_agreement", "Convention de stage", "text", "Oui, fournie par l'école")}
+        </div>
+        <label class="f" style="margin-top:12px">Compétences<input type="text" name="competences" value="${esc(p.competences)}" placeholder="ex. Python, SQL, DCF, Excel, private debt"><span class="hint">Utilisées pour le calcul du % de compatibilité.</span></label>
+      </details>
       <div><button class="btn btn-primary" type="submit">Enregistrer le profil</button></div>
     </form>`);
+  document.getElementById("cvQuick").onchange = (e) => e.target.files[0] && uploadCv(e.target.files[0]);
   document.getElementById("prf").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/profile", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Profil enregistré.").then(async () => { ME = await api("/api/auth/me"); route(); }); };
   if (ME.owner) document.getElementById("importYaml").onclick = () => act(() => api("/api/profile/import-yaml", { method: "POST" })).then((r) => { toast("Importé : " + r.imported.join(", ") + "."); route(); });
 }
@@ -723,8 +834,9 @@ async function documentsView() {
       <div class="stack" style="gap:4px;min-width:0"><span class="hint">${label}</span>
         ${d ? `<b style="overflow-wrap:anywhere">${esc(d.name)}</b><span class="sub" style="font-size:13px">Version ${d.version} · ajouté ${ago(d.created_at)}</span>
                <span class="row" style="gap:12px"><a href="/api/documents/${d.id}/file" target="_blank" rel="noopener">Voir</a></span>` : `<b>Aucun fichier</b>`}
-        <form class="row upform" data-type="${type}" style="flex-wrap:wrap;margin-top:6px"><input type="file" name="file" accept="application/pdf" required aria-label="${label} (PDF)" style="max-width:240px">
-          <button class="btn btn-primary btn-sm" type="submit">${d ? "Remplacer" : "Importer"} (PDF)</button></form>
+        <form class="upform" data-type="${type}"><label class="drop">
+          <input type="file" name="file" accept="application/pdf" required aria-label="${label} (PDF)">
+          <b>${d ? "Remplacer" : "Importer"} : glisse ton PDF ici</b><span class="hint">ou clique pour le choisir · 5 Mo maximum</span></label></form>
       </div></div>`;
   shell("documents", `
     <header class="head"><div class="titles"><h1>2. CV et lettre de motivation</h1><p class="sub" style="margin:4px 0 0">Les documents sélectionnés ici sont utilisés pour tes candidatures.</p></div></header>
@@ -747,8 +859,17 @@ async function documentsView() {
           <td style="white-space:nowrap">${d.is_default ? "" : `<button class="btn btn-quiet btn-sm" data-def="${d.id}">Utiliser</button>`}<button class="btn btn-quiet btn-sm" data-ren="${d.id}">Renommer</button><button class="btn btn-quiet btn-sm" data-del="${d.id}" style="color:var(--red)">Supprimer</button></td></tr>`).join("")}
       </tbody></table></div>` : `<div class="empty">Aucun document pour l'instant.</div>`}
     </section>`);
+  // Glisser-déposer ou choix du fichier : l'import part tout seul.
+  $app.querySelectorAll(".upform").forEach((f) => {
+    const input = f.querySelector("input[type=file]"), zone = f.querySelector(".drop");
+    input.onchange = () => input.files[0] && f.requestSubmit();
+    ["dragenter", "dragover"].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((ev) => zone.addEventListener(ev, () => zone.classList.remove("over")));
+    zone.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) { input.files = e.dataTransfer.files; f.requestSubmit(); } });
+  });
   $app.querySelectorAll(".upform").forEach((f) => f.onsubmit = async (e) => {
     e.preventDefault();
+    if (f.dataset.type === "cv") return uploadCv(f.querySelector("input[type=file]").files[0]);
     const fd = new FormData(f); fd.append("type", f.dataset.type);
     const d = await act(() => api("/api/documents", { method: "POST", body: fd }));
     if (!d.is_default) await api(`/api/documents/${d.id}`, { method: "PATCH", body: { is_default: true } });
@@ -889,31 +1010,16 @@ async function accountView() {
       <form id="pw" class="form two"><label class="f">Mot de passe actuel<input type="password" name="current" autocomplete="current-password" required></label>
         <label class="f">Nouveau mot de passe<input type="password" name="new" autocomplete="new-password" minlength="8" required>${PW_HINT}</label>
         <div><button class="btn btn-ghost" type="submit">Changer le mot de passe</button></div></form></section>
+    <section class="card pad stack"><div class="spread"><h2>Apparence</h2>
+      <div class="seg" role="group" aria-label="Apparence">${[["auto", "Automatique"], ["light", "Claire"], ["dark", "Sombre"]].map(([k, l]) => `<button data-theme-btn="${k}" aria-pressed="${getTheme() === k}">${l}</button>`).join("")}</div></div></section>
     <section class="card pad stack"><h2>Appareils connectés</h2>
       <div class="spread"><span class="sub" style="font-size:14px">${ME.sessions} session${ME.sessions > 1 ? "s" : ""} ouverte${ME.sessions > 1 ? "s" : ""} (14 jours maximum chacune).</span>
         <button class="btn btn-ghost" id="outAll">Se déconnecter partout</button></div></section>
-    ${ME.owner ? `<section class="card pad stack" id="mailCard"><div class="spread"><h2>E-mails (administrateur)</h2>
-      <button class="btn btn-ghost" id="mailTest">M'envoyer un e-mail de test</button></div>
-      <div id="mailInfo" class="hint">Chargement des réglages…</div></section>` : ""}
     <section class="card pad stack"><h2>Supprimer mon compte</h2>
       <div class="spread"><span class="sub" style="font-size:14px">Efface ton profil, tes documents et ton historique.</span><button class="btn btn-danger" id="delAcc">Supprimer mon compte</button></div></section>`);
   document.getElementById("em").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/email", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Adresse modifiée.").then(async () => { ME = await api("/api/auth/me"); route(); }); };
   document.getElementById("pw").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/password", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Mot de passe modifié. Tes autres appareils sont déconnectés.").then(async () => { e.target.reset(); ME = await api("/api/auth/me"); route(); }); };
-  if (ME.owner) {
-    const show = (m, res) => {
-      const rows = [["Méthode", m.method], ["Clé API Brevo", m.brevo_api_key], ["Serveur SMTP", m.smtp_host], ["Port", m.smtp_port],
-        ["Identifiant SMTP", m.smtp_user], ["Mot de passe SMTP", m.smtp_password + (m.smtp_password_spaces ? " ⚠ contient des espaces" : "")], ["Expéditeur", m.sender]];
-      document.getElementById("mailInfo").innerHTML = (res ? (res.ok ? '<div class="blk ok">✓ E-mail de test envoyé : regarde ta boîte (et les spams).</div>'
-        : `<div class="blk">✗ ${esc(res.error)}</div>`) : "") +
-        `<table style="margin-top:8px">${rows.map(([k, v]) => `<tr><td class="sub">${k}</td><td><code>${esc(v)}</code></td></tr>`).join("")}</table>`;
-    };
-    api("/api/admin/mail").then((m) => show(m)).catch(() => {});
-    document.getElementById("mailTest").onclick = async (e) => {
-      e.target.disabled = true; e.target.textContent = "Envoi…";
-      const r = await api("/api/admin/mail/test", { method: "POST" }).catch((err) => ({ ok: false, error: err.message }));
-      show(r, r); e.target.disabled = false; e.target.textContent = "M'envoyer un e-mail de test";
-    };
-  }
+  $app.querySelectorAll("[data-theme-btn]").forEach((b) => b.onclick = () => { setTheme(b.dataset.themeBtn); route(); });
   document.getElementById("outAll").onclick = () => { if (confirm("Te déconnecter de tous les appareils, y compris celui-ci ?")) act(() => api("/api/auth/logout-all", { method: "POST" })).then(() => { ME = null; GUIDE = null; go("#/login"); }); };
   document.getElementById("delAcc").onclick = () => modal(`<h2>Supprimer mon compte</h2><p class="sub">Action définitive. Saisis ton mot de passe pour confirmer.</p>
     <form id="da" class="form"><input type="password" name="password" required autocomplete="current-password" aria-label="Mot de passe">
@@ -950,7 +1056,16 @@ async function routeNow() {
       "#/criteres": prefsView, "#/profil": profileView, "#/documents": documentsView, "#/mode": modeView, "#/compte": accountView };
     await (m ? applicationView(m[1]) : (views[h] || dashboardView)());
     if (!pollMs && (GUIDE.steps.some((s) => s.waiting) || GUIDE.next?.waiting)) schedulePoll(4000);
-  } catch (e) { if (ME && !(e instanceof StalePage)) toast(e.message, true); }
+  } catch (e) {
+    if (!ME || e instanceof StalePage) return;
+    toast(e.message, true);
+    const main = $app.querySelector("main");
+    if (main && !main.querySelector(".errcard")) {
+      main.insertAdjacentHTML("afterbegin", `<section class="card pad errcard" role="alert"><div><b>Impossible de charger cette page.</b>
+        <div class="sub" style="font-size:14px">${esc(e.message)} Vérifie ta connexion puis réessaie.</div></div><button class="btn btn-ghost" id="retry">Réessayer</button></section>`);
+      document.getElementById("retry").onclick = () => route();
+    }
+  }
 }
 
 window.addEventListener("hashchange", route);
