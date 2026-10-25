@@ -291,7 +291,7 @@ async function dashboardView() {
   shell("home", `
     <header class="head">
       <div class="titles"><h1>Bonjour ${esc(ME.first_name || "")} 👋</h1>
-        <p class="sub" style="margin:4px 0 0">Votre copilote continue de rechercher les meilleures opportunités pour vous.</p></div>
+        <p class="sub" style="margin:4px 0 0">Ton copilote continue de chercher les meilleures opportunités pour toi.</p></div>
       <button class="bell" id="bell" aria-label="Notifications">${svg("bell", 20)}${d.unread ? '<span class="pip"></span>' : ""}</button>
 
     </header>
@@ -299,13 +299,13 @@ async function dashboardView() {
     ${cp.fake ? `<div class="banner"><span class="badge b-amber">Robot simulé</span> Mode démonstration : aucune candidature réelle n'est envoyée.</div>` : ""}
     <section class="grid g4">
       <div class="card pad stat"><div class="label">Offres analysées</div><div class="value">${s.offers.toLocaleString("fr-FR")}</div><div class="note ${s.offers_week ? "up" : ""}">+${s.offers_week} cette semaine</div></div>
-      <div class="card pad stat"><div class="label">Correspondent à votre profil</div><div class="value">${s.matching}</div><div class="note">dont ${s.matching_high} au-dessus de 85 %</div></div>
+      <div class="card pad stat"><div class="label">Correspondent à ton profil</div><div class="value">${s.matching}</div><div class="note">dont ${s.matching_high} au-dessus de 85 %</div></div>
       <div class="card pad stat"><div class="label">Candidatures envoyées</div><div class="value">${s.sent}</div><div class="note">envoi confirmé · ${s.pending} en attente</div></div>
       <div class="card pad stat hero" onclick="location.hash='#/envoi'"><div class="label">Prêts à valider</div><div class="value">${s.to_validate}</div><div class="note" style="font-weight:600">Voir les dossiers →</div></div>
     </section>
     <section class="grid g2">
       <div class="card pad copilot stack">
-        <div class="spread"><div><h2>Votre copilote</h2><div class="sub" style="font-size:13px">${cp.last_search_at ? "Dernière recherche " + ago(cp.last_search_at) : "Pas encore de recherche"}</div></div>
+        <div class="spread"><div><h2>Ton copilote</h2><div class="sub" style="font-size:13px">${cp.last_search_at ? "Dernière recherche " + ago(cp.last_search_at) : "Pas encore de recherche"}</div></div>
           <span class="badge" style="background:${cp.paused ? "rgba(255,255,255,.12)" : "rgba(18,184,154,.18)"};color:${cp.paused ? "#fff" : "#5EE6C8"}"><span class="dot" style="background:${cp.paused ? "#aaa" : "#12B89A"}"></span>${cp.paused ? "En pause" : "Actif"}</span></div>
         <div>
           ${running ? `<div class="task"><span class="tick"><span class="spin"></span></span>${esc(JOBN[running.type] || running.type)}<span class="meta">${esc(running.progress || (running.statut === "en_attente" ? "En file" : "En cours"))}</span></div>` : ""}
@@ -432,7 +432,7 @@ async function applicationView(id) {
         </section>
         ${a.questions.length ? `
         <section class="card pad warn stack">
-          <div class="spread"><h2>Votre intervention est nécessaire</h2><span class="badge b-amber">${openQ.length} question${openQ.length > 1 ? "s" : ""} ouverte${openQ.length > 1 ? "s" : ""}</span></div>
+          <div class="spread"><h2>Ton intervention est nécessaire</h2><span class="badge b-amber">${openQ.length} question${openQ.length > 1 ? "s" : ""} ouverte${openQ.length > 1 ? "s" : ""}</span></div>
           <p style="margin:0;font-size:14px">Le recruteur pose ${a.questions.length > 1 ? "ces questions" : "cette question"}. CandiPilot ne répond pas à ta place aux questions personnelles ou de motivation.</p>
           <form id="qForm" class="stack">${a.questions.map((q, i) => `<label class="f">${esc(q.label)}<textarea name="q${i}" maxlength="1500" placeholder="Ta réponse, en quelques phrases…" ${editable ? "" : "disabled"}>${esc(q.answer || "")}</textarea></label>`).join("")}
             ${editable ? `<button class="btn btn-ghost" type="submit" style="align-self:flex-start">Enregistrer mes réponses</button>` : ""}</form>
@@ -440,7 +440,7 @@ async function applicationView(id) {
         ${a.detail && !["echec", "incertaine"].includes(a.statut) ? `<p class="hint" style="margin:0">Robot : ${esc(a.detail)}</p>` : ""}
       </div>
       <aside class="card pad stack" style="position:sticky;top:20px">
-        <h2>Votre décision</h2>
+        <h2>Ta décision</h2>
         <div class="spread" style="font-size:14px"><span class="sub">Dossier prêt</span><b>${ready} / ${a.readiness.length}</b></div>
         <div class="progress"><i style="width:${(ready / a.readiness.length) * 100}%"></i></div>
         <ul style="list-style:none;margin:0;padding:0;font-size:13px;display:grid;gap:4px">${a.readiness.map((r) => `<li style="color:${r.ok ? "var(--green)" : "var(--muted)"}">${r.ok ? "✓" : "○"} ${esc(r.label)}</li>`).join("")}</ul>
@@ -925,12 +925,20 @@ async function accountView() {
 function schedulePoll(ms) {
   clearTimeout(pollTimer);
   pollMs = ms;
-  if (ms) pollTimer = setTimeout(() => { if (!document.querySelector(".scrim") && !document.activeElement?.matches("input,textarea,select")) route(); else schedulePoll(ms); }, ms);
+  if (ms) pollTimer = setTimeout(() => { if (!document.querySelector(".scrim") && !document.activeElement?.matches("input,textarea,select")) route(true); else schedulePoll(ms); }, ms);
 }
 
-async function route() {
+let routing = 0;
+async function route(quiet) {
   clearTimeout(pollTimer);
   pollMs = 0;
+  const mine = ++routing;
+  // Barre de chargement pour un changement de page, pas pour les rafraîchissements automatiques.
+  if (quiet !== true) document.body.classList.add("loading");
+  try { await routeNow(); } finally { if (mine === routing) document.body.classList.remove("loading"); }
+}
+
+async function routeNow() {
   const h = (location.hash || "#/").split("?")[0];
   const pub = { "#/login": () => authView("login"), "#/register": () => authView("register"), "#/mot-de-passe-oublie": forgotView, "#/reinitialiser": resetView };
   if (pub[h]) return pub[h]();

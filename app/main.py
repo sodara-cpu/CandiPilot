@@ -1015,6 +1015,8 @@ def launch(user=CurrentUser):
 def dashboard(user=CurrentUser):
     uid = user["id"]
     with db.tx() as c:
+        last_search = c.execute("""SELECT updated_at FROM jobs WHERE user_id=? AND type='search' AND statut='termine'
+                                   ORDER BY updated_at DESC LIMIT 1""", (uid,)).fetchone()
         prefs = _prefs(c, uid)
         n_offers = c.execute("SELECT COUNT(*) n FROM offers WHERE user_id=?", (uid,)).fetchone()["n"]
         week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
@@ -1055,7 +1057,8 @@ def dashboard(user=CurrentUser):
                   "sent": counts.get("confirmee", 0),
                   "pending": counts.get("soumission", 0) + counts.get("incertaine", 0),
                   "to_validate": counts.get("a_valider", 0), "counts": counts},
-        "copilot": {"paused": prefs["paused"], "last_search_at": prefs["last_search_at"],
+        # Dernière VRAIE recherche (last_search_at sert aussi à programmer la première, à l'inscription).
+        "copilot": {"paused": prefs["paused"], "last_search_at": last_search["updated_at"] if last_search else "",
                     "every_hours": prefs["search_every_hours"], "jobs": jobs, "fake": worker.FAKE},
         "chart": list(chart.values()),
         "to_validate": to_validate,
