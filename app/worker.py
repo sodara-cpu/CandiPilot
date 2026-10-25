@@ -386,10 +386,17 @@ def run_discover(job: dict) -> None:
     wanted = [x.lower() for x in prefs.get("contrats") or []]
     zones = [z.lower() for z in prefs.get("zones") or []]
     total_new = 0
-    for src in sources:
+
+    def read(src):
         try:
-            jobs = discovery.fetch(src["platform"], src["token"], src["company"])
+            return discovery.fetch(src["platform"], src["token"], src["company"]), None
         except Exception as e:
+            return None, e
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:          # des dizaines d'entreprises : lues en parallèle
+        results = list(ex.map(read, sources))
+    for src, (jobs, e) in zip(sources, results):
+        if e is not None:
             with db.tx() as c:
                 c.execute("UPDATE job_sources SET last_run_at=?, last_status=? WHERE id=?", (db.now(), f"erreur : {e}"[:200], src["id"]))
             log_event("discover_error", user=uid, source=f"{src['platform']}:{src['token']}", error=str(e)[:200])

@@ -770,16 +770,26 @@ async function prefsView() {
 // ---------- sources d'offres : entreprises lues via les API publiques des plateformes de recrutement ----------
 function sourcesCard(src) {
   const st = (x) => x.last_status.startsWith("erreur") ? `<span class="koc">${esc(x.last_status)}</span>` : `<span class="sub">${esc(x.last_status || "en attente")}</span>`;
+  const found = src.sources.reduce((n, x) => n + (x.last_count || 0), 0);
+  const google = (n) => `https://www.google.com/search?q=${encodeURIComponent(n + " carrières stage alternance")}`;
   return `<section class="card pad stack" id="srcCard">
-    <div><h2>Mes sources d'offres</h2>
-      <div class="sub" style="font-size:14px">Ajoute les entreprises qui t'intéressent : CandiPilot lit leurs offres directement sur leur plateforme de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Workable), sans compte ni robot.</div></div>
-    <form id="srcForm" class="row" style="flex-wrap:wrap">
-      <input type="url" name="url" placeholder="Adresse de la page carrières, ex. https://boards.greenhouse.io/adyen" aria-label="Adresse de la page carrières" style="flex:1 1 300px" required>
-      <button class="btn btn-primary" type="submit">Ajouter</button></form>
-    ${src.suggestions.length ? `<div class="ob-f" aria-label="Entreprises suggérées"><span class="hint" style="align-self:center">Suggestions :</span>${src.suggestions.map((x) =>
-      `<button type="button" class="pill" data-sugg="${esc(JSON.stringify(x))}">+ ${esc(x.company)}</button>`).join("")}</div>` : ""}
-    ${src.sources.length ? `<ul class="sitelist">${src.sources.map((x) => `<li><b>${esc(x.company)}</b><span class="badge b-mute">${esc(x.platform_label)}</span>${st(x)}
-      <button class="btn btn-quiet btn-sm" data-delsrc="${x.id}" aria-label="Retirer ${esc(x.company)}">Retirer</button></li>`).join("")}</ul>` : ""}
+    <div class="spread"><div><h2>Mes sources d'offres</h2>
+      <div class="sub" style="font-size:14px">En plus de JobTeaser, CandiPilot lit directement les offres de <b>${src.sources.length} entreprises</b> sur leur plateforme de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Workable), sans compte ni robot.</div></div>
+      ${found ? `<span class="badge b-green">${found} offre${found > 1 ? "s" : ""} pour toi</span>` : ""}</div>
+    ${src.sources.length ? `<details class="adv"><summary>Entreprises suivies (${src.sources.length})</summary>
+      <ul class="sitelist" style="margin-top:8px">${src.sources.map((x) => `<li><b>${esc(x.company)}</b><span class="badge b-mute">${esc(x.platform_label)}</span>${st(x)}
+      <button class="btn btn-quiet btn-sm" data-delsrc="${x.id}" aria-label="Retirer ${esc(x.company)}">Retirer</button></li>`).join("")}</ul></details>` : ""}
+    <details class="adv"><summary>Ajouter une entreprise</summary>
+      <form id="srcForm" class="row" style="flex-wrap:wrap;margin-top:8px">
+        <input type="url" name="url" placeholder="Adresse de sa page carrières, ex. https://jobs.lever.co/entreprise" aria-label="Adresse de la page carrières" style="flex:1 1 300px" required>
+        <button class="btn btn-primary" type="submit">Ajouter</button></form>
+      ${src.suggestions.length ? `<div class="ob-f" aria-label="Entreprises retirées" style="margin-top:8px"><span class="hint" style="align-self:center">Retirées :</span>${src.suggestions.map((x) =>
+        `<button type="button" class="pill" data-sugg="${esc(JSON.stringify(x))}">+ ${esc(x.company)}</button>`).join("")}</div>` : ""}</details>
+    ${src.assisted?.length ? `<details class="adv"><summary>Autres entreprises : candidature assistée (${src.assisted.length})</summary>
+      <p class="hint" style="margin:8px 0">Leurs offres ne sont pas lisibles automatiquement (Workday, Taleo, site maison, LinkedIn, Welcome to the Jungle…).
+        Trouve l'offre sur leur site, ajoute-la avec « Ajouter une offre » (page Offres) en collant son adresse : CandiPilot prépare ton dossier
+        et l'extension remplit le formulaire. Tu cliques toi-même sur « Envoyer ».</p>
+      <div class="ob-f">${src.assisted.map((n) => `<a class="pill" href="${google(n)}" target="_blank" rel="noopener">${esc(n)} ↗</a>`).join("")}</div></details>` : ""}
   </section>`;
 }
 

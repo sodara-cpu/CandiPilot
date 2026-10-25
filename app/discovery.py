@@ -16,6 +16,7 @@ import html
 import json
 import os
 import re
+import time
 import unicodedata
 import urllib.request
 from urllib import robotparser
@@ -74,8 +75,22 @@ def _job(**kw) -> dict:
     return base
 
 
+_CACHE: dict = {}
+CACHE_S = 3 * 3600
+
+
 def fetch(platform: str, token: str, company: str = "") -> list:
-    """Offres actuellement publiées par une source."""
+    """Offres actuellement publiées par une source (lues une fois toutes les 3 h pour tous les utilisateurs)."""
+    key = (platform, token, company)
+    hit = _CACHE.get(key)
+    if hit and time.time() - hit[0] < CACHE_S and not _TEST:
+        return [dict(j) for j in hit[1]]
+    jobs = _fetch(platform, token, company)
+    _CACHE[key] = (time.time(), jobs)
+    return [dict(j) for j in jobs]
+
+
+def _fetch(platform: str, token: str, company: str = "") -> list:
     if platform == "jsonld":
         return fetch_jsonld(token, company)
     data = json.loads(_get(API[platform].format(t=token)))

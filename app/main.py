@@ -525,12 +525,13 @@ class SourceIn(BaseModel):
 @app.get("/api/sources")
 def list_sources(user=CurrentUser):
     with db.tx() as c:
-        mine = db.rows(c.execute("SELECT * FROM job_sources WHERE user_id=? ORDER BY created_at", (user["id"],)))
+        mine = db.rows(c.execute("SELECT * FROM job_sources WHERE user_id=? AND enabled=1 ORDER BY company", (user["id"],)))
     have = {(x["platform"], x["token"].lower()) for x in mine}
     from .discovery import PLATFORMS
     return {"sources": [{**x, "platform_label": PLATFORMS.get(x["platform"], x["platform"])} for x in mine],
             "suggestions": [{"platform": p, "token": t, "company": n, "platform_label": PLATFORMS[p]}
-                            for p, t, n in migrations.SUGGESTED_SOURCES if (p, t.lower()) not in have]}
+                            for p, t, n in migrations.SUGGESTED_SOURCES if (p, t.lower()) not in have],
+            "assisted": migrations.ASSISTED_COMPANIES}
 
 
 @app.post("/api/sources", status_code=201)
@@ -553,8 +554,13 @@ def add_source(body: SourceIn, user=CurrentUser):
         or urlparse(token).netloc
     sid = db.new_id()
     with db.tx() as c:
-        if c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND platform=? AND token=?", (user["id"], platform, token)).fetchone():
+        old = c.execute("SELECT id, enabled FROM job_sources WHERE user_id=? AND platform=? AND token=?", (user["id"], platform, token)).fetchone()
+        if old and old["enabled"]:
             raise HTTPException(409, "Cette entreprise est déjà dans tes sources.")
+        if old:          # retirée auparavant : on la réactive
+            c.execute("UPDATE job_sources SET enabled=1, last_status=? WHERE id=?", (f"ajoutée : {len(jobs)} offres publiées", old["id"]))
+            worker.enqueue(c, user["id"], "discover")
+            return {"id": old["id"], "platform": platform, "token": token, "company": company, "published": len(jobs)}
         c.execute("""INSERT INTO job_sources(id,user_id,platform,token,company,last_status,last_count,created_at)
                      VALUES (?,?,?,?,?,?,?,?)""", (sid, user["id"], platform, token, company, f"ajoutée : {len(jobs)} offres publiées", 0, db.now()))
         worker.enqueue(c, user["id"], "discover")
@@ -564,7 +570,8 @@ def add_source(body: SourceIn, user=CurrentUser):
 @app.delete("/api/sources/{source_id}")
 def delete_source(source_id: str, user=CurrentUser):
     with db.tx() as c:
-        if not c.execute("DELETE FROM job_sources WHERE id=? AND user_id=?", (source_id, user["id"])).rowcount:
+        # Désactivée, pas effacée : le catalogue par défaut ne la remettra pas.
+        if not c.execute("UPDATE job_sources SET enabled=0 WHERE id=? AND user_id=? AND enabled=1", (source_id, user["id"])).rowcount:
             raise HTTPException(404, "Source introuvable.")
     return {"ok": True}
 

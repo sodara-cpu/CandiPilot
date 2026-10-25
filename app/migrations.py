@@ -6,7 +6,9 @@ Pour ajouter une migration : l'ajouter à la fin de MIGRATIONS (ne jamais modifi
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 from . import db
 
@@ -110,16 +112,12 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 ALTER TABLE preferences ADD COLUMN default_sources_at TEXT DEFAULT ''""", None),
 ]
 
-# Entreprises suivies par défaut pour chaque compte (identifiants vérifiés le 25/10/2026 sur leurs API publiques :
-# offres en France, dont des stages et alternances). Ajoutées une seule fois ; l'utilisateur peut en retirer.
-DEFAULT_SOURCES = [
-    ("greenhouse", "doctolib", "Doctolib"), ("greenhouse", "mirakl", "Mirakl"), ("greenhouse", "datadog", "Datadog"),
-    ("greenhouse", "dataiku", "Dataiku"), ("greenhouse", "algolia", "Algolia"), ("greenhouse", "adyen", "Adyen"),
-    ("ashby", "alan", "Alan"), ("ashby", "qonto", "Qonto"), ("ashby", "pennylane", "Pennylane"), ("lever", "swile", "Swile"),
-    ("workable", "huggingface", "Hugging Face"), ("smartrecruiters", "Ubisoft2", "Ubisoft"), ("smartrecruiters", "Accor", "Accor"),
-    ("smartrecruiters", "Devoteam", "Devoteam"),
-]
+# Entreprises suivies par défaut pour chaque compte : catalogue construit par scripts/find_sources.py (API publiques
+# vérifiées, offres en France). Les entreprises qu'on ne peut pas lire sont proposées en candidature assistée.
+CATALOG = json.loads((Path(__file__).parent / "sources_catalog.json").read_text(encoding="utf-8"))
+DEFAULT_SOURCES = [(x["platform"], x["token"], x["company"]) for x in CATALOG["sources"]]
 SUGGESTED_SOURCES = DEFAULT_SOURCES      # proposées de nouveau si l'utilisateur en a retiré
+ASSISTED_COMPANIES = CATALOG["assisted"]
 
 # Niveau d'automatisation par défaut (modifiable par le propriétaire : /api/admin/sites).
 # auto = le robot peut envoyer ; assisted = il pré-remplit, l'utilisateur envoie ; manual = remplissage seulement.
@@ -160,18 +158,20 @@ def apply(conn) -> list:
 
 
 def ensure_default_sources(conn, user_id: str) -> int:
-    """Ajoute les entreprises suivies par défaut à un compte, une seule fois (jamais après un retrait).
+    """Ajoute les entreprises suivies par défaut à un compte, à chaque nouvelle version du catalogue. Une entreprise
+    retirée par l'utilisateur reste désactivée (sa ligne est gardée) : jamais réactivée toute seule.
     Désactivable (tests sans Internet) : CANDIPILOT_DEFAULT_SOURCES=0."""
     if os.environ.get("CANDIPILOT_DEFAULT_SOURCES", "1") == "0":
         return 0
     p = conn.execute("SELECT default_sources_at FROM preferences WHERE user_id=?", (user_id,)).fetchone()
-    if not p or p["default_sources_at"]:
+    version = CATALOG["verified_at"]
+    if not p or p["default_sources_at"] == version:
         return 0
     n = 0
     for platform, token, company in DEFAULT_SOURCES:
         n += conn.execute("""INSERT OR IGNORE INTO job_sources(id,user_id,platform,token,company,last_status,last_count,created_at)
                              VALUES (?,?,?,?,?,?,?,?)""", (db.new_id(), user_id, platform, token, company, "suivie par défaut", 0, db.now())).rowcount
-    conn.execute("UPDATE preferences SET default_sources_at=? WHERE user_id=?", (db.now(), user_id))
+    conn.execute("UPDATE preferences SET default_sources_at=? WHERE user_id=?", (version, user_id))
     return n
 
 
