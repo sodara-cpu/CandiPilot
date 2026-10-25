@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble
 
-Le serveur est hébergé sur **Render** (site + base PostgreSQL). Le robot ne tourne plus sur un
+Le serveur est hébergé sur **Render** (site, gratuit) avec une base PostgreSQL chez **Neon** (gratuite). Le robot ne tourne plus sur un
 serveur : il tourne dans **l'extension CandiPilot du navigateur de chaque utilisateur**, avec les
 sessions que l'utilisateur a déjà (JobTeaser, LinkedIn…). Aucun mot de passe n'est confié à CandiPilot,
 les protections anti-robots ne bloquent pas un vrai navigateur, et chaque utilisateur fait son propre
@@ -19,9 +19,11 @@ flowchart LR
   end
   subgraph R[Render]
     API[FastAPI<br/>comptes, parcours, matching,<br/>lettres PDF, file de tâches]
-    DB[(PostgreSQL<br/>données + CV + lettres)]
-    API --> DB
   end
+  subgraph N[Neon]
+    DB[(PostgreSQL<br/>données + CV + lettres)]
+  end
+  API --> DB
   W -- HTTPS --> API
   X -- jeton : tâches / résultats --> API
   GH[GitHub<br/>main / develop] -- déploiement auto --> API
@@ -52,20 +54,20 @@ liaison `link.js`, fenêtre `popup.*`) ; côté serveur `app/agent.py`.
 |---|---|---|---|
 | Hébergement | Render (`render.yaml`) | Mac : `./deploy.sh recette` | Mac : `./start.sh` |
 | Branche | `main` (déploiement automatique) | `develop` | branche de travail |
-| Base | PostgreSQL Render | SQLite `data-recette/` | SQLite `data/` |
+| Base | PostgreSQL Neon | SQLite `data-recette/` | SQLite `data/` |
 | Robot | extension des utilisateurs | simulé | extension, ou `CANDIPILOT_ROBOT=local` |
 
-## Mettre en ligne sur Render (une fois)
+## Mettre en ligne (une fois)
 
-1. Sur [render.com](https://render.com), connecté au compte qui héberge déjà WeSkool :
-   **New → Blueprint**, choisir le dépôt **sodara-cpu/CandiPilot**, branche **main**, puis **Apply**.
-   Render crée le site `candipilot` (Docker) et la base `candipilot-db`.
-2. Dans le service `candipilot` → **Environment** : remplir `CANDIPILOT_SMTP_USER`,
-   `CANDIPILOT_SMTP_PASSWORD` (mot de passe d'application Gmail) et `CANDIPILOT_SMTP_FROM`.
+1. **Neon** (neon.tech) : dans le projet, bouton **Connect** → copier l'adresse de connexion
+   (`postgresql://…neon.tech/…?sslmode=require`).
+2. **Render** (render.com, compte de WeSkool) : **New → Blueprint**, dépôt **sodara-cpu/CandiPilot**,
+   branche **main**. Render demande `DATABASE_URL` : coller l'adresse Neon, puis **Apply**.
+   (Les champs `CANDIPILOT_SMTP_*` peuvent rester vides au début.) Les tables sont créées au premier démarrage.
 3. Chaque push sur `main` redéploie automatiquement.
 
-Offre gratuite : le site se met en veille après 15 min sans visite (réveil en ~1 min) et la base
-gratuite expire au bout de 30 jours ; passer aux offres payantes pour un vrai lancement.
+Offres gratuites : le site Render se met en veille après 15 min sans visite (réveil en ~1 min) ;
+la base Neon gratuite (0,5 Go) n'expire pas.
 
 ## Branches et cycle de livraison
 
@@ -78,7 +80,7 @@ gratuite expire au bout de 30 jours ; passer aux offres payantes pour un vrai la
 
 | Variable | Rôle |
 |---|---|
-| `DATABASE_URL` | PostgreSQL (fourni par Render) ; sans elle, SQLite dans `CANDIPILOT_DATA` |
+| `DATABASE_URL` | PostgreSQL (adresse Neon) ; sans elle, SQLite dans `CANDIPILOT_DATA` |
 | `CANDIPILOT_ROBOT` | `extension` (défaut), `local` (robot Playwright sur le serveur) ou `simule` |
 | `CANDIPILOT_FAKE_ROBOT=1` | robot simulé (tests) |
 | `CANDIPILOT_SECURE_COOKIE=1` | cookie de session en HTTPS uniquement |

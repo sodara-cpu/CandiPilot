@@ -183,7 +183,8 @@ class _PgConn:
     def __init__(self):
         import psycopg
         from psycopg.rows import dict_row
-        self._c = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=20)
+        # prepare_threshold=None : compatible avec les « poolers » (Neon, PgBouncer).
+        self._c = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=20, prepare_threshold=None)
 
     def execute(self, sql: str, params=()):
         return self._c.execute(_pg_sql(sql), tuple(params))

@@ -1,18 +1,18 @@
-# Render Blueprint : le site CandiPilot + sa base PostgreSQL.
-# Sur render.com : New > Blueprint > choisir le dépôt sodara-cpu/CandiPilot (branche main).
+# Render Blueprint : le site CandiPilot (gratuit). La base PostgreSQL est chez Neon (gratuite, sans expiration).
+# Sur render.com : New > Blueprint > dépôt sodara-cpu/CandiPilot (branche main) ;
+# Render demande alors DATABASE_URL : coller l'adresse de connexion Neon (postgresql://…?sslmode=require).
 services:
   - type: web
     name: candipilot
     runtime: docker
     plan: free
+    region: frankfurt          # proche de la base Neon (Europe)
     branch: main
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: candipilot-db
-          property: connectionString
+        sync: false
       - key: CANDIPILOT_ROBOT
         value: extension
       - key: CANDIPILOT_SECURE_COOKIE
@@ -30,8 +30,3 @@ services:
         sync: false
       - key: CANDIPILOT_SMTP_FROM
         sync: false
-
-databases:
-  - name: candipilot-db
-    plan: free
-    databaseName: candipilot
