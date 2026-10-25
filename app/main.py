@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -171,12 +172,13 @@ def forgot_password(body: ForgotIn, request: Request):
     if token:
         base = auth.PUBLIC_URL or str(request.base_url).rstrip("/")
         link = f"{base}/#/reinitialiser?token={token}"
-        try:
-            auth.send_mail(email, "CandiPilot : réinitialise ton mot de passe",
-                           f"Bonjour,\n\nPour choisir un nouveau mot de passe, ouvre ce lien (valable {auth.RESET_MINUTES} minutes) :\n{link}\n\n"
-                           "Si tu n'es pas à l'origine de cette demande, ignore ce message.\n\nCandiPilot")
-        except Exception as e:
-            print(f"[e-mail] échec de l'envoi à {email} : {e}", flush=True)
+        body = (f"Bonjour,\n\nPour choisir un nouveau mot de passe, ouvre ce lien (valable {auth.RESET_MINUTES} minutes) :\n{link}\n\n"
+                "Si tu n'es pas à l'origine de cette demande, ignore ce message.\n\nCandiPilot")
+        # Envoi en arrière-plan : la page répond tout de suite, même si le serveur d'e-mail est lent.
+        threading.Thread(target=auth.send_mail_logged, args=(email, "CandiPilot : réinitialise ton mot de passe", body),
+                         daemon=True).start()
+    else:
+        print(f"[e-mail] mot de passe oublié : aucun compte pour {email}, rien envoyé", flush=True)
     return {"ok": True}
 
 

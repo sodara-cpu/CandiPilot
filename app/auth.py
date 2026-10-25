@@ -136,6 +136,15 @@ def consume_reset(conn, token: str):
     return r["user_id"]
 
 
+def send_mail_logged(to: str, subject: str, body: str) -> None:
+    """Envoie et écrit le résultat dans le journal du serveur (onglet Logs de Render)."""
+    try:
+        if send_mail(to, subject, body):
+            print(f"[e-mail] envoyé à {to} : {subject}", flush=True)
+    except Exception as e:
+        print(f"[e-mail] ÉCHEC de l'envoi à {to} : {type(e).__name__}: {e}", flush=True)
+
+
 def send_mail(to: str, subject: str, body: str) -> bool:
     """Envoie par SMTP si CANDIPILOT_SMTP_HOST est configuré ; sinon écrit le message dans le journal du serveur."""
     host = os.environ.get("CANDIPILOT_SMTP_HOST")
