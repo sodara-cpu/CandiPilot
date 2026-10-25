@@ -45,7 +45,9 @@ with db.tx() as c:
           f"{len(migrations.DEFAULT_SOURCES)} entreprises lisibles, {len(migrations.ASSISTED_COMPANIES)} en candidature assistée")
     check(len({(p, t.lower()) for p, t, _ in migrations.DEFAULT_SOURCES}) == len(migrations.DEFAULT_SOURCES), "aucun doublon dans le catalogue")
     platforms = {p for p, _, _ in migrations.DEFAULT_SOURCES}
-    check(platforms <= {"greenhouse", "lever", "ashby", "smartrecruiters", "workable"}, "uniquement des API publiques prévues pour être lues")
+    check(platforms <= {"greenhouse", "lever", "ashby", "smartrecruiters", "workable", "sitemap"},
+          "uniquement des API publiques ou des sites carrières lus comme un moteur de recherche (robots.txt respecté)")
+    check(all(t.startswith("https://") for p, t, _ in migrations.DEFAULT_SOURCES if p == "sitemap"), "sites carrières en https")
     os.environ["CANDIPILOT_DEFAULT_SOURCES"] = "0"
     c.execute("INSERT INTO users(id,email,password_hash,created_at) VALUES ('u2','u2@example.com','x',?)", (db.now(),))
     c.execute("INSERT INTO preferences(user_id) VALUES ('u2')")
