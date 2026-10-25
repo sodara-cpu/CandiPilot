@@ -4,6 +4,7 @@
 // 3. Il signale sur quels sites l'utilisateur est connecté (JobTeaser, LinkedIn, Welcome to the Jungle).
 import { jtLoggedIn, jtListCards, jtReadStart, jtInspect, jtApply, jtSucceeded, jtAlreadyApplied } from "./jobteaser.js";
 import { applyFieldAnswers, fillForm } from "./filler.js";
+import { observePage, runAction } from "./agent.js";
 
 const VERSION = chrome.runtime.getManifest().version;
 const SITES = {
@@ -342,6 +343,55 @@ function detectConfirmation() {
   return m ? `${m[0]} — ${location.href}` : null;
 }
 
+// ---------- agent navigateur : Claude pilote l'onglet ----------
+async function observeAll(tabId) {
+  const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: observePage }).catch(() => []);
+  const map = {}, obs = { url: "", title: "", elements: [], text: "" };
+  frames.forEach((f, k) => {
+    const r = f.result;
+    if (!r) return;
+    if (f.frameId === 0) Object.assign(obs, { url: r.url, title: r.title, text: r.text + obs.text });
+    else if (r.elements.length) obs.text += "\n[cadre intégré] " + r.text.slice(0, 600);
+    for (const el of r.elements) { const id = k * 1000 + el.id; map[id] = { frameId: f.frameId, local: el.id }; obs.elements.push({ ...el, id }); }
+  });
+  obs.elements = obs.elements.slice(0, 150);
+  return { obs, map };
+}
+
+// Boucle observer → Claude décide → exécuter, jusqu'à « finish ». Renvoie { status, message, tabId }.
+async function agentLoop(tabId, job, files, onNewPage) {
+  const history = [];
+  let seenUrl = "";
+  for (let step = 0; step < 25; step++) {
+    const url = (await chrome.tabs.get(tabId).catch(() => ({}))).url || "";
+    if (url !== seenUrl && onNewPage) { seenUrl = url; await onNewPage(tabId).catch(() => {}); }   // passe rapide : règles, réseau, IA
+    const { obs, map } = await observeAll(tabId);
+    const res = await api("/api/agent/step", { method: "POST", body: { job_id: job.id, step, observation: obs, history } }).catch(() => null);
+    if (!res || !res.actions) return { status: "need_user", message: "CandiPilot injoignable : termine toi-même.", tabId };
+    let moved = false;
+    for (const a of res.actions) {
+      if (a.name === "finish") return { ...a.input, tabId };
+      if (a.name === "wait") { await sleep(Math.min(10, Math.max(1, a.input.seconds || 2)) * 1000); history.push("attente"); continue; }
+      const m = map[a.input.id];
+      let r = "élément inconnu";
+      if (m) {
+        const [x] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [m.frameId] }, func: runAction,
+          args: [{ ...a, input: { ...a.input, id: m.local } }, files, !!res.allow_submit] }).catch(() => []);
+        r = (x && x.result) || "erreur";
+      }
+      history.push(`${a.name} ${JSON.stringify(a.input).slice(0, 140)} → ${r}`);
+      if (a.name === "click" && r === "ok") { moved = true; break; }      // la page peut changer : on la relit
+    }
+    if (moved) {
+      await sleep(1800);
+      const opened = (await chrome.tabs.query({})).find((t) => t.openerTabId === tabId && t.url && !t.url.startsWith("chrome"));
+      if (opened) tabId = opened.id;                                   // « Postuler » ouvert dans un nouvel onglet
+    }
+    await waitLoaded(tabId);
+  }
+  return { status: "need_user", message: "Trop d'étapes : termine toi-même la candidature.", tabId };
+}
+
 async function doApply(job) {
   const host = new URL(job.url).hostname;
   if (!(await chrome.permissions.contains({ origins: [new URL(job.url).origin + "/*"] })))
@@ -368,6 +418,17 @@ async function doApply(job) {
   if (!(await chrome.permissions.contains({ origins: [target + "/*"] })))
     return { status: "permission", detail: `Le formulaire est sur ${new URL(target).hostname} : clique sur l'icône CandiPilot puis « Autoriser les sites carrières », et clique « Reprendre l'envoi ».` };
   const res = await fillFrames(tab.id, profile, files, { jobId: job.id });
+  // L'agent IA prend la main pour tout le reste (boutons inattendus, étapes, listes, cases), jusqu'à l'envoi.
+  const runAgent = async () => {
+    const r = await agentLoop(tab.id, job, files, (id) => fillFrames(id, profile, files, { jobId: job.id }));
+    if (r.tabId && r.tabId !== tab.id) tab = await chrome.tabs.get(r.tabId);
+    if (r.status === "not_applicable") return r;
+    await beat(r.status === "ready_to_submit" ? `Prêt : ${r.message} Vérifie, complète l'orange et clique « Envoyer ».`
+      : `À toi : ${r.message} CandiPilot reprendra dès que la page change.`);
+    return r;
+  };
+  const first = await runAgent();
+  if (first.status === "not_applicable") return { status: "failed", detail: "Pas de formulaire de candidature trouvé : " + first.message };
   doApply.lastEmpty = (await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: countEmptyFields }).catch(() => []))
     .reduce((n, f) => n + (f.result || 0), 0);           // référence : seuls de NOUVEAUX champs relancent le remplissage
   const login = await run(tab.id, () => !![...document.querySelectorAll("input[type=password]")].find((e) => e.offsetParent !== null)).catch(() => false);
@@ -386,8 +447,8 @@ async function doApply(job) {
         .reduce((n, f) => n + (f.result || 0), 0);
       if (empty >= 2 && (t.url !== lastUrl || empty > (doApply.lastEmpty || 0))) {
         lastUrl = t.url;
-        const more = await fillFrames(tab.id, profile, files, { jobId: job.id }).catch(() => null);
-        if (more) await beat(`Nouvelle étape remplie (${more.filled.length + more.check.length} champs) : vérifie puis continue.`);
+        await fillFrames(tab.id, profile, files, { jobId: job.id }).catch(() => null);
+        await runAgent();                                  // nouvelle page / étape / après connexion : l'agent reprend
       }
       doApply.lastEmpty = empty;
     }

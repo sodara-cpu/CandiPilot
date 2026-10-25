@@ -231,7 +231,8 @@ try:
 
         # 5d. Postuler sur le site de l'entreprise : l'extension ouvre l'offre, clique « Apply », remplit ; le candidat
         #     envoie ; la page de confirmation sert de preuve.
-        s = api.post(BASE + "/api/offers", data={"url": BASE + "/fake-ats/offer/greenhouse", "poste": "Stage Audit",
+        api.put(BASE + "/api/workflow", data={"submit_mode": "assisted"})      # le candidat envoie lui-même
+        s = api.post(BASE + "/api/offers", data={"url": BASE + "/fake-ats/offer/aventure", "poste": "Stage Audit",
                                                  "entreprise": "Acme Corp", "apply_type": "external"})
         site_app = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
         api.post(BASE + f"/api/applications/{site_app}/prepare")
@@ -241,7 +242,7 @@ try:
         # (onglet ouvert par l'extension : piloté depuis l'extension, l'outil de test ne le voit pas)
         tab_js = "chrome.tabs.query({}).then(t => (t.find(x => x.url.includes('/fake-ats/apply/greenhouse?real=1')) || {}).id || 0)"
         site_tab = until(lambda: sw.evaluate(tab_js), 40)
-        check(bool(site_tab), "l'extension ouvre l'offre et suit le bouton « Apply for this job »")
+        check(bool(site_tab), "agent IA : bouton inconnu des règles (« Rejoindre l'aventure ») trouvé et cliqué, formulaire atteint")
         in_tab = lambda js: sw.evaluate(f"chrome.scripting.executeScript({{target: {{tabId: {site_tab}}}, func: () => {js}}}).then(r => r[0].result)")
         check(until(lambda: in_tab("document.querySelector('#first_name').value") == "Alex", 20)
               and in_tab("document.querySelector('#resume').files.length") == 1, "formulaire de l'entreprise rempli (identité, CV)")
@@ -255,6 +256,18 @@ try:
         in_tab("(document.querySelector('#question_902').value = 'Oui', document.querySelector('button[type=submit]').click(), 1)")   # le candidat envoie
         a = until(lambda: (lambda x: x if x["statut"] == "confirmee" else None)(api.get(BASE + f"/api/applications/{site_app}").json()), 30)
         check(a and "Thank you for applying" in a["preuve"], f"page de confirmation repérée : « Envoyée » avec preuve ({a and a['preuve'][:60]})")
+
+        # 5e. Envoi automatique choisi par le candidat (mode auto + consentement) : l'agent coche le consentement et envoie.
+        api.put(BASE + "/api/workflow", data={"submit_mode": "auto", "auto_consent": True})
+        s = api.post(BASE + "/api/offers", data={"url": BASE + "/fake-ats/offer/greenhouse?auto=1", "poste": "Stage Contrôle",
+                                                 "entreprise": "Auto Corp", "apply_type": "external"})
+        auto_app = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
+        api.post(BASE + f"/api/applications/{auto_app}/prepare")
+        until(lambda: api.get(BASE + f"/api/applications/{auto_app}").json()["statut"] == "a_valider", 30)
+        api.post(BASE + f"/api/applications/{auto_app}/apply")
+        sw.evaluate("() => { poll(); return 1; }")
+        a = until(lambda: (lambda x: x if x["statut"] == "confirmee" else None)(api.get(BASE + f"/api/applications/{auto_app}").json()), 60)
+        check(a and "Thank you for applying" in a["preuve"], "envoi automatique autorisé : l'agent remplit, accepte, envoie ; « Envoyée » avec preuve")
 
         s = api.post(BASE + "/api/offers", data={"url": "https://careers.exemple-inconnu.fr/job/42", "poste": "Stage Finance",
                                                  "entreprise": "Inconnue SA", "apply_type": "external"})

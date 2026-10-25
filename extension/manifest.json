@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CandiPilot",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Ton copilote de candidatures : cherche et postule avec tes propres sessions (JobTeaser…), remplit n'importe quel formulaire.",
   "permissions": [
     "storage",

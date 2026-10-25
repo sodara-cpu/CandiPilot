@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from urllib.parse import urlparse
 import secrets
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -274,6 +275,58 @@ def agent_fields(body: FieldsIn, user=Agent):
         llm.record_usage(c, user["id"], llm.FIELDS_COST, usage)
     worker.log_event("fields_mapped", user=user["id"], fields=len(fields), answered=len(out), **usage)
     return {"answers": model_out + [dict(a, source="claude") for a in out], "ai": True}
+
+
+class StepIn(BaseModel):
+    job_id: str = ""
+    step: int = 0
+    observation: dict = {}
+    history: list = []
+
+
+@router.post("/api/agent/step")
+def agent_step(body: StepIn, user=Agent):
+    """Agent navigateur : Claude décide des prochaines actions dans l'onglet de candidature (page observée par
+    l'extension). Les actions sont exécutées par l'extension, dans le Chrome du candidat, qui ne clique jamais
+    sur l'envoi final."""
+    from . import llm
+    if not llm.enabled():
+        return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "Agent IA non activé : termine toi-même."}}]}
+    if body.step >= llm.AGENT_MAX_STEPS:
+        return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "Trop d'étapes : termine toi-même la candidature."}}]}
+    with db.tx() as c:
+        if llm.budget_left(c, user["id"]) < llm.AGENT_COST:
+            return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "Limite quotidienne de l'IA atteinte."}}]}
+        ctx = robot.load_context(c, user["id"])
+        offer, answers = None, {}
+        job = c.execute("SELECT application_id FROM jobs WHERE id=? AND user_id=?", (body.job_id, user["id"])).fetchone() if body.job_id else None
+        if job and job["application_id"]:
+            a = worker.load_app(c, job["application_id"])
+            if a:
+                offer = db.row(c.execute("SELECT * FROM offers WHERE id=? AND user_id=?", (a["offer_id"], user["id"])).fetchone())
+                answers = {q["label"]: q.get("answer", "") for q in db.jload(a["questions"], [])}
+        allow = _allow_submit(c, user["id"], (body.observation or {}).get("url", ""))
+    try:
+        actions, usage = llm.agent_step(body.observation or {}, [str(h)[:200] for h in body.history][-20:], ctx, offer, answers, allow)
+    except Exception as e:
+        worker.log_event("agent_step_error", user=user["id"], error=f"{type(e).__name__}: {e}"[:300])
+        return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "L'IA n'a pas pu répondre : termine toi-même."}}]}
+    with db.tx() as c:
+        llm.record_usage(c, user["id"], llm.AGENT_COST, usage)
+    if body.job_id:
+        worker.progress(body.job_id, f"Agent IA, étape {body.step + 1} : " + ", ".join(a["name"] for a in actions))
+    worker.log_event("agent_step", user=user["id"], step=body.step, actions=[a["name"] for a in actions], allow_submit=allow, **usage)
+    return {"actions": actions, "allow_submit": allow}
+
+
+def _allow_submit(c, uid: str, url: str) -> bool:
+    """Envoi final par l'agent : seulement si le candidat l'a choisi (mode automatique + consentement enregistré),
+    et jamais sur un site dont les conditions interdisent l'automatisation (registre des sites : LinkedIn…)."""
+    p = c.execute("SELECT default_mode, auto_submit_consent_at FROM preferences WHERE user_id=?", (uid,)).fetchone()
+    if not p or p["default_mode"] != "auto" or not p["auto_submit_consent_at"]:
+        return False
+    host = urlparse(url).netloc.lower()
+    return not any(d in host for d in ("linkedin.com", "welcometothejungle.com"))
 
 
 @router.post("/api/agent/jobs/{job_id}/partial")

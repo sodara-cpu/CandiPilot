@@ -204,6 +204,13 @@ def fake_offer_greenhouse():
       <a href="/fake-ats/apply/greenhouse?real=1">Apply for this job</a>""")
 
 
+@router.get("/fake-ats/offer/aventure")
+def fake_offer_adventure():
+    """Bouton au nom inattendu (« Rejoindre l'aventure ») : les règles ne le reconnaissent pas, l'agent IA si."""
+    return _page("Stage Finance — Maison Z", """<h1>Stage Finance (H/F)</h1><p>Rejoins-nous !</p>
+      <button type="button" onclick="location.href='/fake-ats/apply/greenhouse?real=1'">Rejoindre l'aventure</button>""")
+
+
 @router.get("/fake-ats/apply/lever")
 def fake_apply_lever():
     """Formulaire au balisage de Lever : nom complet en un seul champ, liens nommés urls[...]."""
