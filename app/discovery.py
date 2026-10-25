@@ -18,6 +18,7 @@ import os
 import re
 import time
 import unicodedata
+import urllib.parse
 import urllib.request
 from urllib import robotparser
 from urllib.parse import urlparse
@@ -33,7 +34,7 @@ API = {
     "workable": (_TEST + "/workable/{t}") if _TEST else "https://apply.workable.com/api/v1/widget/accounts/{t}",
 }
 PLATFORMS = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "smartrecruiters": "SmartRecruiters",
-             "workable": "Workable", "jsonld": "Page carrières"}
+             "workable": "Workable", "jsonld": "Page carrières", "sitemap": "Site carrières"}
 # Reconnaissance de la plateforme à partir d'une adresse.
 PATTERNS = [
     ("greenhouse", r"(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_board\?for=)?([\w-]+)"),
@@ -45,8 +46,9 @@ PATTERNS = [
 ]
 
 
-def _get(url: str, timeout: int = 25):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json, text/html"})
+def _get(url: str, timeout: int = 25, accept: str = "application/json, text/html"):
+    url = urllib.parse.quote(url, safe=":/?&=%#+,;@!$'()*~")       # adresses avec accents (plans de site mal encodés)
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": accept})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "ignore")
 
@@ -83,7 +85,8 @@ def fetch(platform: str, token: str, company: str = "") -> list:
     """Offres actuellement publiées par une source (lues une fois toutes les 3 h pour tous les utilisateurs)."""
     key = (platform, token, company)
     hit = _CACHE.get(key)
-    if hit and time.time() - hit[0] < CACHE_S and not _TEST:
+    ttl = CACHE_S * 4 if platform == "sitemap" else CACHE_S       # site carrières : relu deux fois par jour au plus
+    if hit and time.time() - hit[0] < ttl and not _TEST:
         return [dict(j) for j in hit[1]]
     jobs = _fetch(platform, token, company)
     _CACHE[key] = (time.time(), jobs)
@@ -93,6 +96,8 @@ def fetch(platform: str, token: str, company: str = "") -> list:
 def _fetch(platform: str, token: str, company: str = "") -> list:
     if platform == "jsonld":
         return fetch_jsonld(token, company)
+    if platform == "sitemap":
+        return fetch_sitemap(token, company)
     data = json.loads(_get(API[platform].format(t=token)))
     out = []
     if platform == "greenhouse":
@@ -132,17 +137,22 @@ def _allowed(url: str) -> bool:
     p = urlparse(url)
     rp = robotparser.RobotFileParser()
     try:
-        rp.parse(_get(f"{p.scheme}://{p.netloc}/robots.txt", timeout=10).splitlines())
+        rp.parse(_get(f"{p.scheme}://{p.netloc}/robots.txt", timeout=10, accept="*/*").splitlines())
     except Exception:
         return True
     return rp.can_fetch(UA, url)
 
 
-def fetch_jsonld(url: str, company: str = "") -> list:
+def _name(v):
+    """Valeur schema.org qui peut être un texte ou un objet {"name": …}."""
+    return v.get("name", "") if isinstance(v, dict) else v
+
+
+def fetch_jsonld(url: str, company: str = "", check_robots: bool = True) -> list:
     """Offres décrites en JSON-LD schema.org JobPosting sur une page carrières (si robots.txt l'autorise)."""
-    if not _allowed(url):
+    if check_robots and not _allowed(url):
         raise PermissionError("robots.txt n'autorise pas la lecture de cette page.")
-    page = _get(url)
+    page = _get(url, accept="text/html,*/*")
     out = []
     for block in re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S | re.I):
         try:
@@ -157,13 +167,99 @@ def fetch_jsonld(url: str, company: str = "") -> list:
             loc = loc[0] if isinstance(loc, list) and loc else loc
             addr = (loc.get("address") or {}) if isinstance(loc, dict) else {}
             org = it.get("hiringOrganization") or {}
-            out.append(_job(url=it.get("url") or url, title=it.get("title"),
+            out.append(_job(url=it.get("url") or url, title=html.unescape(str(it.get("title") or "")),
                             company=(org.get("name") if isinstance(org, dict) else "") or company,
-                            location=", ".join(x for x in (addr.get("addressLocality"), addr.get("addressCountry")) if isinstance(x, str) and x),
+                            location=", ".join(x for x in (addr.get("addressLocality"), _name(addr.get("addressCountry"))) if isinstance(x, str) and x),
                             contract=str(it.get("employmentType") or ""), remote=it.get("jobLocationType") == "TELECOMMUTE",
                             description=_text(it.get("description", "")), published_at=str(it.get("datePosted", "")),
                             ref=str(it.get("identifier", {}).get("value", "") if isinstance(it.get("identifier"), dict) else it.get("url", ""))))
     return [j for j in out if j["title"]]
+
+
+# ---------- Sites carrières (Workday, Taleo, SuccessFactors, sites maison) : comme un moteur de recherche ----------
+# 1. robots.txt doit autoriser la lecture ; on y trouve le plan du site (Sitemap) prévu pour les moteurs de recherche.
+# 2. Le plan du site liste les pages d'offres ; on garde celles qui semblent en France (lieu dans l'adresse, si présent).
+# 3. Chaque page d'offre est lue pour sa fiche schema.org « JobPosting » (celle que les entreprises publient pour
+#    Google Emplois). Lecture lente (CRAWL_DELAY entre deux pages), limitée (MAX_PAGES), identifiée (UA), mise en cache.
+MAX_PAGES = int(os.environ.get("CANDIPILOT_SITEMAP_PAGES") or 200)
+CRAWL_DELAY = float(os.environ.get("CANDIPILOT_CRAWL_DELAY") or 1.0)
+JOB_URL = re.compile(r"/(job|jobs|offre|offres|emploi|emplois|career|careers|vacancy|position|requisition|stage)s?[/-]", re.I)
+WORKDAY_JOB = re.compile(r"/job/([^/]+)/[^/]+$")
+
+
+def _robots(base: str):
+    p = urlparse(base)
+    rp = robotparser.RobotFileParser()
+    try:
+        text = _get(f"{p.scheme}://{p.netloc}/robots.txt", timeout=15, accept="*/*")
+    except Exception:
+        text = ""
+    rp.parse(text.splitlines())
+    maps = [l.split(":", 1)[1].strip() for l in text.splitlines() if l.lower().startswith("sitemap:")]
+    return rp, maps
+
+
+def _sitemap_urls(url: str, depth: int = 0, limit: int = 5000) -> list:
+    """Adresses listées par un plan du site (et ses sous-plans)."""
+    try:
+        xml = _get(url, timeout=30, accept="*/*")
+    except Exception:
+        return []
+    locs = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", xml)
+    if "<sitemapindex" in xml and depth < 2:
+        out = []
+        for sub in locs[:30]:
+            if len(out) >= limit:
+                break
+            out += _sitemap_urls(html.unescape(sub), depth + 1, limit - len(out))
+        return out
+    return [html.unescape(u) for u in locs[:limit]]
+
+
+def _looks_french(url: str) -> bool:
+    """Lieu dans l'adresse : /job/<Lieu>/<Intitulé>[/…] (Workday, L'Oréal…). En France ? Sans lieu repérable : à lire."""
+    m = re.search(r"/jobs?/([^/]+)/[^/]+", urlparse(url).path, re.I)
+    if not m:
+        return True
+    loc = _norm(urllib.parse.unquote(m.group(1)).replace("-", " "))
+    if any(_norm(c) in loc for c in FRANCE + IDF) or loc in ("", "multiple locations", "remote", "france"):
+        return True
+    return bool(re.search(r"\d", loc))        # segment avec chiffres : identifiant, pas un lieu
+
+
+def fetch_sitemap(base: str, company: str = "") -> list:
+    """Offres d'un site carrières lues comme le fait un moteur de recherche (voir plus haut)."""
+    rp, maps = _robots(base)
+    if not rp.can_fetch(UA, base.rstrip("/") + "/"):
+        raise PermissionError("robots.txt n'autorise pas la lecture de ce site carrières.")
+    root = base.rstrip("/")
+    maps = [m for m in maps if m.startswith(root) or urlparse(m).netloc == urlparse(base).netloc] or \
+        [root + "/siteMap.xml", root + "/sitemap.xml"]
+    urls = []
+    for m in maps:
+        urls += [u for u in _sitemap_urls(m) if u.startswith(root) and JOB_URL.search(urlparse(u).path)]
+        if urls:
+            break
+    urls = [u for u in dict.fromkeys(urls) if _looks_french(u)]
+    # Pages en français d'abord (presque toujours des offres en France) : utile quand le lieu n'est pas dans l'adresse.
+    # Puis stages, alternances, VIE, jeunes diplômés d'abord : le site est lu en partie seulement (MAX_PAGES).
+    urls.sort(key=lambda u: (0 if re.search(r"stage|stagiaire|intern|alternan|apprenti|v-?i-?e|graduate|trainee|campus", u, re.I) else 1,
+                             0 if re.search(r"(/fr[-_/]|/fr$|[-_]fr$|lang=fr)", u, re.I) else 1))
+    urls = [u for u in urls if rp.can_fetch(UA, u)][:MAX_PAGES]
+    out = []
+    for i, u in enumerate(urls):
+        if i:
+            time.sleep(CRAWL_DELAY)
+        try:
+            jobs = fetch_jsonld(u, company, check_robots=False)
+        except Exception:
+            continue
+        for j in jobs:
+            j["url"] = u
+            j["ref"] = j["ref"] or u
+            j["company"] = company or j["company"]       # nom propre plutôt que la raison sociale de la filiale
+        out += jobs[:1]
+    return out
 
 
 def _norm(t: str) -> str:

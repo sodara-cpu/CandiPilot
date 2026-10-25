@@ -18,6 +18,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import os  # noqa: E402
+os.environ.setdefault("CANDIPILOT_SITEMAP_PAGES", "40")      # validation : les pages stages / en français sont lues en premier
+os.environ.setdefault("CANDIPILOT_CRAWL_DELAY", "0.5")
 from app import discovery  # noqa: E402
 
 FR = ("france", "paris", "lyon", "lille", "bordeaux", "toulouse", "nantes", "marseille", "nice", "rennes", "montpellier",
@@ -64,6 +67,56 @@ GONE = {"Quonto", "Station F", "Captain Train", "Chauffeur Privé", "Lunchr", "C
         "Sendinblue", "Sezzle", "Kard", "Side", "Focus", "King", "Tier", "Bolt", "Dott", "Backmarket"}
 
 
+# Sites carrières « maison » des grands groupes (lus comme un moteur de recherche : robots.txt, plan du site, fiches
+# JobPosting). Gardés seulement si la lecture est autorisée et donne des offres en France.
+CAREER_SITES = {
+    "L'Oréal": "https://careers.loreal.com", "BNP Paribas": "https://group.bnpparibas", "Société Générale": "https://careers.societegenerale.com",
+    "TotalEnergies": "https://jobs.totalenergies.com", "Danone": "https://careers.danone.com", "Capgemini": "https://www.capgemini.com",
+    "Schneider Electric": "https://careers.se.com", "AXA": "https://careers.axa.com", "Crédit Agricole": "https://www.groupecreditagricole.jobs",
+    "BPCE": "https://recrutement.bpce.fr", "Natixis": "https://recrutement.bpce.fr", "Thales": "https://careers.thalesgroup.com",
+    "Deloitte": "https://www2.deloitte.com", "PwC": "https://www.pwc.fr", "KPMG": "https://careers.kpmg.fr", "EY": "https://careers.ey.com",
+    "LVMH": "https://www.lvmh.com", "Hermès": "https://careers.hermes.com", "Chanel": "https://careers.chanel.com",
+    "Orange": "https://orange.jobs", "EDF": "https://www.edf.fr", "Engie": "https://jobs.engie.com", "Publicis": "https://careers.publicisgroupe.com",
+    "SNCF": "https://www.emploi.sncf.com", "Amundi": "https://jobs.amundi.com", "Renault": "https://www.renaultgroup.com",
+    "Stellantis": "https://careers.stellantis.com", "Safran": "https://www.safran-group.com", "Airbus": "https://www.airbus.com",
+    "Decathlon": "https://joinus.decathlon.fr", "Carrefour": "https://www.recrutement.carrefour.fr", "Michelin": "https://recrutement.michelin.fr",
+    "Air France": "https://recrutement.airfrance.com", "Bouygues": "https://www.bouygues.com", "Vinci": "https://jobs.vinci.com",
+    "Veolia": "https://www.veolia.com", "Saint-Gobain": "https://joinus.saint-gobain.com", "Pernod Ricard": "https://www.pernod-ricard.com",
+    "Kering": "https://www.kering.com", "Sanofi": "https://www.sanofi.com", "Accenture": "https://www.accenture.com",
+    "McKinsey": "https://www.mckinsey.com", "BCG": "https://careers.bcg.com", "Bain": "https://www.bain.com", "Rothschild": "https://www.rothschildandco.com",
+    "Lazard": "https://www.lazard.com", "Goldman Sachs": "https://higher.gs.com", "JP Morgan": "https://careers.jpmorgan.com",
+    "Morgan Stanley": "https://www.morganstanley.com", "Citi": "https://jobs.citi.com", "HSBC": "https://www.hsbc.com", "Barclays": "https://search.jobs.barclays",
+    "Allianz": "https://careers.allianz.com", "Generali": "https://www.generali.fr", "La Banque Postale": "https://www.labanquepostale.com",
+    "Crédit Mutuel": "https://recrutement.creditmutuel.fr", "Bpifrance": "https://www.bpifrance.fr", "Euronext": "https://www.euronext.com",
+    "Ardian": "https://www.ardian.com", "Eurazeo": "https://www.eurazeo.com", "Tikehau": "https://www.tikehaucapital.com",
+    "Edenred": "https://careers.edenred.com", "Sodexo": "https://jobs.sodexo.com", "Legrand": "https://www.legrandgroup.com",
+    "Air Liquide": "https://www.airliquide.com", "Dassault Systèmes": "https://www.3ds.com", "Atos": "https://atos.net",
+    "Sopra Steria": "https://www.soprasteria.fr", "Wavestone": "https://www.wavestone.com", "Sia Partners": "https://www.sia-partners.com",
+    "Ipsos": "https://www.ipsos.com", "Havas": "https://www.havas.com", "TF1": "https://www.groupe-tf1.fr", "Club Med": "https://www.clubmedjobs.com",
+    "Fnac Darty": "https://www.fnacdarty.com", "Leroy Merlin": "https://recrutement.leroymerlin.fr", "Auchan": "https://www.auchan-recrute.fr",
+    "Lacoste": "https://corporate.lacoste.com", "Sephora": "https://www.sephora.fr", "Clarins": "https://www.clarins.com",
+}
+WD = ("wd3", "wd1", "wd5", "wd103", "wd12", "wd2", "wd10")
+
+
+def probe_workday(name: str):
+    """Entreprise sur Workday : son robots.txt indique l'adresse du plan du site (donc du site carrières)."""
+    for slug in slugs(name)[:3]:
+        for wd in WD:
+            host = f"https://{slug}.{wd}.myworkdayjobs.com"
+            try:
+                text = discovery._get(host + "/robots.txt", timeout=10, accept="*/*")
+            except Exception:
+                continue
+            maps = [l.split(":", 1)[1].strip() for l in text.splitlines() if l.lower().startswith("sitemap:")]
+            for m in maps:
+                site = m.rsplit("/", 1)[0]
+                r = probe((name, "sitemap", site))
+                if r:
+                    return r
+    return None
+
+
 def slugs(name: str) -> list:
     n = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower().replace("'", "").replace(".", "")
     a = re.sub(r"[^a-z0-9]+", "", n)
@@ -91,6 +144,13 @@ def main():
     print(f"{len(names)} entreprises, {len(tries)} essais…", flush=True)
     with ThreadPoolExecutor(24) as ex:
         found = [r for r in ex.map(probe, tries) if r]
+    readable_ats = {r["company"] for r in found}
+    rest = [n for n in names if n not in readable_ats]
+    print(f"Sites carrières : Workday pour {len(rest)} entreprises, {len(CAREER_SITES)} sites maison…", flush=True)
+    with ThreadPoolExecutor(16) as ex:
+        found += [r for r in ex.map(probe_workday, rest) if r]
+        found += [r for r in ex.map(probe, [(n, "sitemap", u) for n, u in CAREER_SITES.items()
+                                            if n not in {r["company"] for r in found}]) if r]
     best = {}
     found = [dict(r, company=ALIASES.get(r["company"], r["company"])) for r in found
              if (r["platform"], r["token"].lower()) not in EXCLUDE]

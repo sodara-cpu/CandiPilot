@@ -99,6 +99,9 @@ try:
     s, r = c.req("POST", "/api/sources", {"url": BASE + "/fake-ats/page/maisonx"})
     check(s == 201 and r["platform"] == "jsonld" and r["published"] == 1, "page carrières lue via ses données structurées (JobPosting)")
     check(c.req("POST", "/api/sources", {"url": "pas une adresse"})[0] == 422, "adresse invalide refusée")
+    s, r = c.req("POST", "/api/sources", {"platform": "sitemap", "token": BASE + "/fake-careers", "company": "Maison Y"})
+    check(s == 201 and r["published"] == 2, "site carrières (Workday, site maison) lu comme un moteur de recherche : 2 offres en France")
+
 
     check(c.req("POST", "/api/search")[0] == 202, "découverte lancée")
     offers = until(lambda: (lambda o: o if len(o) >= 6 else None)(c.req("GET", "/api/offers")[1]), 40) or c.req("GET", "/api/offers")[1]
@@ -107,6 +110,9 @@ try:
     check(sum(t.startswith("Finance Intern") for t in titles) == 1, f"doublon Greenhouse / Lever fusionné : {titles}")
     check({"Corporate Finance Intern", "Stage Analyste Financier", "Finance Operations Intern", "Stage Contrôle de gestion"} <= set(titles),
           "offres des 5 autres sources gardées")
+    sm = {o["poste"]: o for o in c.req("GET", "/api/offers")[1] if o["source"] == "sitemap"}
+    check(set(sm) == {"Stage Analyste Crédit", "Stage Contrôle de gestion"} and sm["Stage Analyste Crédit"]["entreprise"] == "Maison Y",
+          "offres du site carrières : page interdite par robots.txt jamais lue, offre à Madrid écartée, nom propre de l'entreprise")
     ats = [o for o in offers if o["source"] in ("greenhouse", "lever", "ashby", "smartrecruiters", "workable", "jsonld")]
     check(len(ats) == 6 and all(o["apply_type"] == "external" for o in ats), "offres des plateformes marquées « site de l'entreprise »")
     rated = until(lambda: (lambda o: o if all(x["match_reason"] for x in o) else None)(c.req("GET", "/api/offers")[1]), 30)

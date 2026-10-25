@@ -236,6 +236,51 @@ def fake_form_other_site():
     return _page("Carrières — Exemple", """<iframe src="https://apply.example.org/job/1" style="width:600px;height:200px"></iframe>""")
 
 
+# ---------- Faux site carrières (Workday, site maison) : lu comme un moteur de recherche ----------
+CAREERS = {"R1": ("Paris", "Stage Analyste Crédit", "INTERN"), "R2": ("Madrid", "Finance Intern", "INTERN"),
+           "R4": ("Lyon", "Stage Contrôle de gestion", "INTERN")}
+
+
+@router.get("/robots.txt")
+def robots(request: Request):
+    base = str(request.base_url).rstrip("/")
+    return HTMLResponse(f"User-agent: *\nDisallow: /fake-careers/private/\nSitemap: {base}/fake-careers/sitemap.xml\n",
+                        media_type="text/plain")
+
+
+@router.get("/fake-careers/sitemap.xml")
+def careers_index(request: Request):
+    base = str(request.base_url).rstrip("/")
+    return HTMLResponse(f'<?xml version="1.0"?><sitemapindex><sitemap><loc>{base}/fake-careers/sitemap-jobs.xml</loc></sitemap></sitemapindex>',
+                        media_type="application/xml")
+
+
+@router.get("/fake-careers/sitemap-jobs.xml")
+def careers_jobs(request: Request):
+    base = str(request.base_url).rstrip("/")
+    urls = [f"{base}/fake-careers/job/{c}/{t.replace(' ', '-')}_{k}" for k, (c, t, _) in CAREERS.items()]
+    urls.append(f"{base}/fake-careers/private/job/Paris/Secret_R3")       # interdite par robots.txt
+    return HTMLResponse('<?xml version="1.0"?><urlset>' + "".join(f"<url><loc>{u}</loc></url>" for u in urls) + "</urlset>",
+                        media_type="application/xml")
+
+
+@router.get("/fake-careers/job/{city}/{slug}")
+def careers_job(city: str, slug: str):
+    ref = slug.rsplit("_", 1)[-1]
+    c, title, kind = CAREERS[ref]
+    ld = json.dumps({"@context": "https://schema.org", "@type": "JobPosting", "title": title, "employmentType": kind,
+                     "hiringOrganization": {"@type": "Organization", "name": "(0042) Maison Y Filiale SAS"},
+                     "jobLocation": {"@type": "Place", "address": {"@type": "PostalAddress", "addressLocality": c,
+                                                                   "addressCountry": {"@type": "Country", "name": "FR" if c != "Madrid" else "ES"}}},
+                     "identifier": {"@type": "PropertyValue", "value": ref}, "description": "<p>Analyse, Excel, reporting.</p>"})
+    return _page(title, f'<script type="application/ld+json">{ld}</script><h1>{title}</h1>')
+
+
+@router.get("/fake-careers/private/job/{city}/{slug}")
+def careers_private(city: str, slug: str):
+    raise HTTPException(500, "Page interdite aux robots : ne doit jamais être lue")
+
+
 @router.get("/fake-form/etapes")
 def fake_form_steps():
     """Formulaire en deux étapes ; l'étape 1 contient un composant (shadow DOM). L'étape 2 n'existe qu'après « Suivant »."""

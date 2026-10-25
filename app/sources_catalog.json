@@ -10,6 +10,14 @@
    "early": 35
   },
   {
+   "platform": "sitemap",
+   "token": "https://careers.loreal.com",
+   "company": "L'Oréal",
+   "jobs": 0,
+   "france": 35,
+   "early": 26
+  },
+  {
    "platform": "smartrecruiters",
    "token": "mazars",
    "company": "Mazars",
@@ -74,10 +82,34 @@
    "early": 13
   },
   {
+   "platform": "sitemap",
+   "token": "https://pernodricard.wd3.myworkdayjobs.com/pernod-ricard",
+   "company": "Pernod Ricard",
+   "jobs": 12,
+   "france": 11,
+   "early": 10
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://ardian.wd103.myworkdayjobs.com/ArdianCareers",
+   "company": "Ardian",
+   "jobs": 12,
+   "france": 12,
+   "early": 9
+  },
+  {
    "platform": "lever",
    "token": "vestiairecollective",
    "company": "Vestiaire Collective",
    "jobs": 17,
+   "france": 12,
+   "early": 8
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://wd3.myworkdaysite.com/recruiting/havas/CreativeExternalCareerSite",
+   "company": "Havas",
+   "jobs": 12,
    "france": 12,
    "early": 8
   },
@@ -95,6 +127,14 @@
    "company": "Aircall",
    "jobs": 77,
    "france": 16,
+   "early": 7
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://pwc.wd3.myworkdayjobs.com/Global_Campus_Careers",
+   "company": "PwC",
+   "jobs": 12,
+   "france": 11,
    "early": 7
   },
   {
@@ -120,6 +160,14 @@
    "jobs": 116,
    "france": 76,
    "early": 5
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://barclays.wd3.myworkdayjobs.com/External_Career_Site_Barclays",
+   "company": "Barclays",
+   "jobs": 7,
+   "france": 6,
+   "early": 4
   },
   {
    "platform": "greenhouse",
@@ -178,6 +226,14 @@
    "early": 3
   },
   {
+   "platform": "sitemap",
+   "token": "https://sanofi.wd3.myworkdayjobs.com/SanofiCareers",
+   "company": "Sanofi",
+   "jobs": 3,
+   "france": 3,
+   "early": 3
+  },
+  {
    "platform": "smartrecruiters",
    "token": "boulanger",
    "company": "Boulanger",
@@ -194,6 +250,14 @@
    "early": 2
   },
   {
+   "platform": "sitemap",
+   "token": "https://ratp.wd3.myworkdayjobs.com/RATP_Externe",
+   "company": "RATP",
+   "jobs": 11,
+   "france": 11,
+   "early": 2
+  },
+  {
    "platform": "lever",
    "token": "blablacar",
    "company": "BlaBlaCar",
@@ -207,6 +271,14 @@
    "company": "Celonis",
    "jobs": 217,
    "france": 6,
+   "early": 2
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://valeo.wd3.myworkdayjobs.com/valeo_jobs",
+   "company": "Valeo",
+   "jobs": 4,
+   "france": 4,
    "early": 2
   },
   {
@@ -234,10 +306,42 @@
    "early": 1
   },
   {
+   "platform": "sitemap",
+   "token": "https://onepoint.wd3.myworkdayjobs.com/WepointCA",
+   "company": "Onepoint",
+   "jobs": 12,
+   "france": 12,
+   "early": 1
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://ipsen.wd103.myworkdayjobs.com/Ipsen_Careers",
+   "company": "Ipsen",
+   "jobs": 12,
+   "france": 12,
+   "early": 1
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://careers.societegenerale.com",
+   "company": "Société Générale",
+   "jobs": 0,
+   "france": 12,
+   "early": 1
+  },
+  {
    "platform": "greenhouse",
    "token": "ivalua",
    "company": "Ivalua",
    "jobs": 44,
+   "france": 10,
+   "early": 1
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://eiffage.wd3.myworkdayjobs.com/Eiffage_Careers",
+   "company": "Eiffage",
+   "jobs": 10,
    "france": 10,
    "early": 1
   },
@@ -263,6 +367,14 @@
    "company": "Dataiku",
    "jobs": 13,
    "france": 4,
+   "early": 1
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://www.clubmedjobs.com",
+   "company": "Club Med",
+   "jobs": 7,
+   "france": 2,
    "early": 1
   },
   {
@@ -319,6 +431,14 @@
    "company": "Dust",
    "jobs": 24,
    "france": 13,
+   "early": 0
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://pluxee.wd3.myworkdayjobs.com/Pluxee_Career_Site",
+   "company": "Pluxee",
+   "jobs": 12,
+   "france": 12,
    "early": 0
   },
   {
@@ -554,6 +674,38 @@
    "early": 0
   },
   {
+   "platform": "sitemap",
+   "token": "https://salesforce.wd12.myworkdayjobs.com/External_Career_Site",
+   "company": "Salesforce",
+   "jobs": 2,
+   "france": 2,
+   "early": 0
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://accenture.wd103.myworkdayjobs.com/AccentureCareers",
+   "company": "Accenture",
+   "jobs": 2,
+   "france": 2,
+   "early": 0
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://blackrock.wd1.myworkdayjobs.com/BlackRock_Professional",
+   "company": "BlackRock",
+   "jobs": 2,
+   "france": 2,
+   "early": 0
+  },
+  {
+   "platform": "sitemap",
+   "token": "https://careers.axa.com",
+   "company": "AXA",
+   "jobs": 12,
+   "france": 2,
+   "early": 0
+  },
+  {
    "platform": "ashby",
    "token": "ankorstore",
    "company": "Ankorstore",
@@ -603,7 +755,6 @@
   }
  ],
  "assisted": [
-  "Accenture",
   "Activision",
   "Adevinta",
   "ADP",
@@ -618,20 +769,16 @@
   "Amundi",
   "Ankama",
   "Apple",
-  "Ardian",
   "Asphalte",
   "Atlassian",
   "Atos",
   "Auchan",
-  "AXA",
   "Bain",
-  "Barclays",
   "BCG",
   "Bergamotte",
   "Binance",
   "BioMérieux",
   "Bitpanda",
-  "BlackRock",
   "Blizzard",
   "BNP Paribas",
   "Bonduelle",
@@ -655,7 +802,6 @@
   "Cityscoot",
   "Clarins",
   "Cloudflare",
-  "Club Med",
   "Coinbase",
   "Confluent",
   "Contentful",
@@ -676,7 +822,6 @@
   "Edenred",
   "EDF",
   "Edmond de Rothschild",
-  "Eiffage",
   "Electronic Arts",
   "Elior",
   "Engie",
@@ -699,14 +844,12 @@
   "Google",
   "Grant Thornton",
   "HashiCorp",
-  "Havas",
   "Hermès",
   "Hivebrite",
   "HSBC",
   "HubSpot",
   "Iliad",
   "Ingenico",
-  "Ipsen",
   "Ipsos",
   "JCDecaux",
   "Jellysmack",
@@ -719,7 +862,6 @@
   "Klarna",
   "KPMG",
   "Kraken",
-  "L'Oréal",
   "La Banque Postale",
   "Lacoste",
   "Lactalis",
@@ -761,7 +903,6 @@
   "October",
   "Oddo BHF",
   "Oliver Wyman",
-  "Onepoint",
   "OpenClassrooms",
   "Oracle",
   "Orange",
@@ -769,28 +910,22 @@
   "Paddle",
   "PayFit",
   "PayPlug",
-  "Pernod Ricard",
   "Personio",
   "Picard",
   "Pierre et Vacances",
   "Pleo",
-  "Pluxee",
   "Poolside",
   "Publicis",
   "Publicis Sapient",
-  "PwC",
   "Qare",
   "Qover",
-  "RATP",
   "Reddit",
   "Renault",
   "Revolut",
   "Riot Games",
   "Rothschild",
   "Safran",
-  "Salesforce",
   "Sandro",
-  "Sanofi",
   "SAP",
   "Scale AI",
   "Schneider Electric",
@@ -806,7 +941,6 @@
   "Skello",
   "Slack",
   "SNCF",
-  "Société Générale",
   "Sodexo",
   "Spacefill",
   "Spendesk",
@@ -830,7 +964,6 @@
   "Ulule",
   "Unity",
   "Upway",
-  "Valeo",
   "Veolia",
   "Vinci",
   "Vinted",
