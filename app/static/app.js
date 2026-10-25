@@ -247,7 +247,17 @@ function forgotView() {
     '<a href="#/login">Retour à la connexion</a>');
   submitWith(form, async (body) => {
     await act(() => api("/api/auth/forgot", { method: "POST", body }));
-    form.innerHTML = `<div class="banner" role="status">Si un compte existe pour <b>${esc(body.email)}</b>, un lien valable 1 heure vient d'être envoyé. Pense à regarder tes courriers indésirables.</div>`;
+    const email = body.email.trim().toLowerCase();
+    document.querySelector(".auth h1").textContent = "Vérifie ta boîte mail";
+    document.querySelector(".auth h1 + .sub").remove();
+    form.outerHTML = `<div class="sent" role="status">
+      <span class="sent-icon" aria-hidden="true">✉</span>
+      <p>Si un compte existe pour <b>${esc(email)}</b>, tu vas recevoir un lien pour choisir un nouveau mot de passe.</p>
+      <p class="hint">Le lien est valable 1 heure. Rien reçu ? Regarde dans tes courriers indésirables.</p>
+      <button class="btn btn-ghost" type="button" id="resend">Renvoyer le lien</button>
+    </div>`;
+    document.getElementById("resend").onclick = (e) => act(() => api("/api/auth/forgot", { method: "POST", body: { email } }), "Lien renvoyé.")
+      .then(() => { e.target.disabled = true; e.target.textContent = "Lien renvoyé"; });
   });
 }
 
