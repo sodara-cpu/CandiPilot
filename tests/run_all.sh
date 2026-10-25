@@ -27,6 +27,7 @@ echo "== Fondations"; $PY tests/test_foundations.py "http://127.0.0.1:$PORT"
 echo "== Découverte"; $PY tests/test_discovery.py $((PORT + 40))
 echo "== Matching IA"; $PY tests/test_llm.py
 echo "== Sources par défaut"; $PY tests/test_defaults.py
+echo "== File de tâches"; $PY tests/test_jobs.py
 echo "== Interface"; $PY tests/test_ui.py "http://127.0.0.1:$PORT" "$TMP/ui"
 echo "== Extension"; $PY tests/test_extension.py $((PORT + 30))
 echo "Tous les tests sont passés."

@@ -399,10 +399,12 @@ def run_discover(job: dict) -> None:
             return discovery.fetch(src["platform"], src["token"], src["company"]), None
         except Exception as e:
             return None, e
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(8) as ex:          # des dizaines d'entreprises : lues en parallèle
-        results = list(ex.map(read, sources))
-    for src, (jobs, e) in zip(sources, results):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    ex = ThreadPoolExecutor(8)                 # des dizaines d'entreprises : lues en parallèle…
+    pending = {ex.submit(read, src): src for src in sources}
+    for fut in as_completed(pending):         # …et chaque entreprise enregistrée dès qu'elle est lue (offres visibles au fil de l'eau)
+        src = pending[fut]
+        jobs, e = fut.result()
         if e is not None:
             with db.tx() as c:
                 if src["id"]:
@@ -446,6 +448,7 @@ def run_discover(job: dict) -> None:
                           (db.now(), f"ok : {len(jobs)} offres publiées, {kept} pour toi", kept, src["id"]))
         total_new += new
         log_event("discover_source", user=uid, source=f"{src['platform']}:{src['token']}", published=len(jobs), kept=kept, new=new)
+    ex.shutdown()
     with db.tx() as c:
         db.add_event(c, uid, "info", f"Découverte : {total_new} nouvelle(s) offre(s) sur {len(sources)} source(s).")
         if total_new and llm.enabled():
@@ -545,7 +548,8 @@ def _worker_loop() -> None:
 def release_stale(c) -> None:
     """Extension fermée en pleine tâche : on la remet en file, sauf un envoi (il a peut-être eu lieu)."""
     limit = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MIN)).isoformat(timespec="seconds")
-    for j in c.execute("SELECT * FROM jobs WHERE statut='en_cours' AND claimed_at<>'' AND claimed_at<?", (limit,)).fetchall():
+    # Sans nouvelle depuis 20 min (ni prise en charge, ni progression) : l'extension a été fermée.
+    for j in c.execute("SELECT * FROM jobs WHERE statut='en_cours' AND claimed_at<>'' AND updated_at<?", (limit,)).fetchall():
         if j["type"] == "submit":
             c.execute("UPDATE jobs SET statut='erreur', progress='Navigateur fermé pendant l''envoi', updated_at=? WHERE id=?",
                       (db.now(), j["id"]))

@@ -181,7 +181,7 @@ def fetch_jsonld(url: str, company: str = "", check_robots: bool = True) -> list
 # 2. Le plan du site liste les pages d'offres ; on garde celles qui semblent en France (lieu dans l'adresse, si présent).
 # 3. Chaque page d'offre est lue pour sa fiche schema.org « JobPosting » (celle que les entreprises publient pour
 #    Google Emplois). Lecture lente (CRAWL_DELAY entre deux pages), limitée (MAX_PAGES), identifiée (UA), mise en cache.
-MAX_PAGES = int(os.environ.get("CANDIPILOT_SITEMAP_PAGES") or 200)
+MAX_PAGES = int(os.environ.get("CANDIPILOT_SITEMAP_PAGES") or 80)    # stages et pages en français lus en premier
 CRAWL_DELAY = float(os.environ.get("CANDIPILOT_CRAWL_DELAY") or 1.0)
 JOB_URL = re.compile(r"/(job|jobs|offre|offres|emploi|emplois|career|careers|vacancy|position|requisition|stage)s?[/-]", re.I)
 WORKDAY_JOB = re.compile(r"/job/([^/]+)/[^/]+$")

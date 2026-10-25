@@ -280,8 +280,9 @@ def init() -> None:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         from . import migrations
         migrations.apply(c)                       # migrations versionnées (app/migrations.py)
-        # Un worker arrêté en pleine tâche : on la remet en file au démarrage.
-        c.execute("UPDATE jobs SET statut='en_attente' WHERE statut='en_cours'")
+        # Tâche du serveur arrêtée en pleine exécution (redémarrage) : remise en file. Celles qu'une extension exécute
+        # dans le navigateur de l'utilisateur (claimed_at) continuent : release_stale s'en charge si elle ne répond plus.
+        c.execute("UPDATE jobs SET statut='en_attente' WHERE statut='en_cours' AND (claimed_at='' OR claimed_at IS NULL)")
 
 
 def row(r) -> dict:

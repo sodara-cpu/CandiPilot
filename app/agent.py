@@ -192,6 +192,11 @@ def job_progress(job_id: str, body: ProgressIn, user=Agent):
 @router.post("/api/agent/jobs/{job_id}/result")
 def job_result(job_id: str, body: ResultIn, user=Agent):
     job = _own_job(job_id, user["id"])
+    # Remise en file par erreur pendant que l'extension travaillait (ancien redémarrage du serveur) : résultat accepté.
+    if job["statut"] == "en_attente" and job.get("claimed_at"):
+        with db.tx() as c:
+            c.execute("UPDATE jobs SET statut='en_cours' WHERE id=? AND statut='en_attente'", (job_id,))
+        job["statut"] = "en_cours"
     if job["statut"] != "en_cours":
         raise HTTPException(409, "Tâche déjà terminée.")
     d = body.data or {}
