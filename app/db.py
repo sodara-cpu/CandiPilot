@@ -221,6 +221,9 @@ def connect():
 def tx():
     if PG:
         with _pg_pool().connection() as conn:      # valide (commit) en sortie, annule en cas d'erreur
+            # Le pooler partage les connexions : un réglage laissé par un autre client (ex. pg_dump vide le
+            # search_path) s'y retrouve. On fixe le schéma pour cette transaction seulement.
+            conn.execute("SET LOCAL search_path TO public")
             yield _PgConn(conn)
         return
     conn = connect()
