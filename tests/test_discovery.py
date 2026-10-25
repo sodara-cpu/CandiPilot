@@ -113,12 +113,28 @@ try:
     check(until(lambda: not any(o["poste"] == "M&A Analyst Internship" for o in c.req("GET", "/api/offers")[1]), 30),
           "offre retirée de la plateforme : marquée expirée et masquée")
 
+    # 3b. Lot 5 : brouillons de l'IA pour les questions du recruteur (Claude simulé), jamais enregistrés seuls.
+    c.req("POST", "/api/documents", {"type": "cv"}, files={"file": ("cv.pdf", b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")})
+    s, r = c.req("POST", "/api/offers", {"url": "https://exemple.fr/offre/q1", "poste": "Stage Analyste financier", "entreprise": "Orsay",
+                                          "apply_type": "jobteaser"})
+    app_id = next(o["application_id"] for o in c.req("GET", "/api/offers")[1] if o["id"] == r["id"])
+    c.req("POST", f"/api/applications/{app_id}/prepare")
+    a = until(lambda: (lambda x: x if x["statut"] == "a_valider" else None)(c.req("GET", f"/api/applications/{app_id}")[1]), 30)
+    check(a and a["questions"] and a["ai_enabled"], "dossier préparé avec une question du recruteur, assistant IA disponible")
+    s, r = c.req("POST", f"/api/applications/{app_id}/suggest")
+    check(s == 200 and r["answers"][0]["label"] == a["questions"][0]["label"] and r["answers"][0]["answer"].startswith("(simulation)"),
+          "brouillon de réponse proposé par l'IA")
+    check(c.req("GET", f"/api/applications/{app_id}")[1]["questions"][0]["answer"] == "", "brouillon jamais enregistré sans le candidat")
+    c.req("PUT", f"/api/applications/{app_id}", {"questions": [{"label": a["questions"][0]["label"], "answer": "Ma réponse."}]})
+    check(c.req("POST", f"/api/applications/{app_id}/suggest")[0] == 409, "plus de brouillon quand tout est répondu")
+
     # 4. Sources propres à chaque utilisateur
     other = Client()
     other.req("POST", "/api/auth/register", {"email": f"o{uuid.uuid4().hex[:6]}@example.com", "password": "motdepasse1"})
     check(other.req("GET", "/api/sources")[1]["sources"] == [] and other.req("GET", "/api/offers")[1] == [], "les sources et offres d'un autre ne sont pas visibles")
     sid = next(iter(srcs.values()))["id"]
     check(other.req("DELETE", f"/api/sources/{sid}")[0] == 404, "impossible de retirer la source d'un autre")
+    check(other.req("POST", f"/api/applications/{app_id}/suggest")[0] == 404, "impossible de demander des brouillons sur le dossier d'un autre")
     check(c.req("DELETE", f"/api/sources/{sid}")[0] == 200, "retrait de sa propre source")
 finally:
     srv.terminate()

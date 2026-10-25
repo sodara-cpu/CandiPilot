@@ -274,3 +274,4 @@ details.adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mu
 .why{display:flex;gap:6px;align-items:flex-start;margin-top:4px;font-size:12.5px;line-height:1.4;color:var(--muted)}
 .why svg{flex:none;margin-top:2px;color:var(--violet)}
 .why-lg{font-size:14.5px;margin:0;padding:10px 14px;border-radius:12px;background:var(--violet-bg);color:var(--ink-2)}
+.ai-draft{border-color:var(--violet)!important;background:var(--violet-bg)}

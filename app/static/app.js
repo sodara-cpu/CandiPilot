@@ -75,6 +75,7 @@ const STATUS = {
   decouverte: ["Découverte", "b-mute"], qualifiee: ["À préparer", "b-mute"], preparation: ["En préparation", "b-blue"],
   a_valider: ["À valider", "b-violet"], soumission: ["En cours d'envoi", "b-blue"], confirmee: ["Envoyée", "b-green"],
   echec: ["Échec", "b-red"], incertaine: ["Incertaine", "b-amber"], ignoree: ["Ignorée", "b-mute"],
+  attente_utilisateur: ["À toi de jouer", "b-amber"],
 };
 const statusBadge = (s) => `<span class="badge ${STATUS[s]?.[1] || "b-mute"}">${esc(STATUS[s]?.[0] || s)}</span>`;
 const MODES = { auto: "Automatique", assisted: "Assisté", manual: "Semi-assisté" };
@@ -296,13 +297,14 @@ async function dashboardView() {
   const running = cp.jobs.find((j) => j.statut === "en_cours" || j.statut === "en_attente");
   const JOBN = { search: "Recherche des offres", prepare: "Préparation d'un dossier", submit: "Envoi d'une candidature", verify: "Vérification d'un envoi", check_sites: "Vérification de tes sites" };
   const sent = n.confirmee || 0, inProgress = (n.preparation || 0) + (n.soumission || 0) + (n.incertaine || 0),
-    action = (n.a_valider || 0) + (n.echec || 0);
+    action = (n.a_valider || 0) + (n.echec || 0) + (n.attente_utilisateur || 0);
   const tile = (href, label, value, hint, cls = "") => `<a class="card pad tile ${cls}" href="${href}">
       <span class="label">${label}</span><span class="value">${value}</span><span class="note">${hint}</span></a>`;
   // « À faire » : uniquement ce qui attend une action de l'utilisateur.
   const todo = [];
   d.to_validate.slice(0, 4).forEach((a) => todo.push(`<a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)} · dossier prêt</div></span>${appState(a)}${svg("chev", 18)}</a>`));
   if (n.echec) todo.push(`<a class="item" href="#/envoi"><span class="dot-ic err">!</span><span class="grow"><div class="t">${n.echec} candidature${n.echec > 1 ? "s n'ont" : " n'a"} pas pu partir</div><div class="s">Voir la raison et reprendre</div></span>${svg("chev", 18)}</a>`);
+  if (n.attente_utilisateur) todo.push(`<a class="item" href="#/candidatures"><span class="dot-ic warn">!</span><span class="grow"><div class="t">${n.attente_utilisateur} envoi${n.attente_utilisateur > 1 ? "s" : ""} en pause : à toi de jouer</div><div class="s">Reconnexion ou vérification anti-robot à faire, puis « Reprendre l'envoi »</div></span>${svg("chev", 18)}</a>`);
   if (n.incertaine) todo.push(`<a class="item" href="#/envoi"><span class="dot-ic warn">?</span><span class="grow"><div class="t">${n.incertaine} envoi${n.incertaine > 1 ? "s" : ""} à vérifier</div><div class="s">La confirmation n'a pas été reçue</div></span>${svg("chev", 18)}</a>`);
   if (GUIDE?.current === null && GUIDE.next && !todo.length) todo.push(`<a class="item" href="${GUIDE.next.href}"><span class="dot-ic">→</span><span class="grow"><div class="t">${esc(GUIDE.next.label)}</div><div class="s">${esc(GUIDE.next.help)}</div></span>${svg("chev", 18)}</a>`);
   shell("home", `
@@ -389,6 +391,7 @@ async function applicationView(id) {
   else if (a.statut === "soumission") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Envoi en cours</b><div style="font-size:14px;color:var(--blue)">${a.mode === "assisted" ? "Le robot a ouvert le formulaire : vérifie-le et clique « Postuler maintenant » dans sa fenêtre." : "Le robot remplit et envoie le formulaire."} Elle passera en « Envoyée » seulement quand JobTeaser confirmera la réception.</div></section>`;
   else if (a.statut === "preparation") banner = `<section class="card pad" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Préparation en cours</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "Le robot rédige la lettre et lit le formulaire de candidature.")}</div></section>`;
   else if (a.statut === "echec") banner = `<section class="card pad" style="background:var(--red-bg);border-color:var(--line-2)"><b style="color:var(--red)">Échec</b><div style="font-size:14px;color:var(--red)">${esc(a.detail)}</div></section>`;
+  else if (a.statut === "attente_utilisateur") banner = `<section class="card pad" style="background:var(--amber-bg);border-color:var(--line-2)"><b style="color:var(--amber)">À toi de jouer : le robot s'est arrêté</b><div style="font-size:14px;color:var(--amber)">${esc(a.detail)} CandiPilot ne contourne jamais une vérification du site.</div></section>`;
   else if (a.statut === "incertaine") banner = `<section class="card pad" style="background:var(--amber-bg);border-color:var(--line-2)"><b style="color:var(--amber)">Envoi incertain</b><div style="font-size:14px;color:var(--amber)">${esc(a.detail)} — lance une vérification ou marque-la comme envoyée si tu as la confirmation.</div></section>`;
 
   shell("send", `
@@ -432,8 +435,10 @@ async function applicationView(id) {
         ${a.questions.length ? `
         <section class="card pad warn stack">
           <div class="spread"><h2>Ton intervention est nécessaire</h2><span class="badge b-amber">${openQ.length} question${openQ.length > 1 ? "s" : ""} ouverte${openQ.length > 1 ? "s" : ""}</span></div>
-          <p style="margin:0;font-size:14px">Le recruteur pose ${a.questions.length > 1 ? "ces questions" : "cette question"}. CandiPilot ne répond pas à ta place aux questions personnelles ou de motivation.</p>
-          <form id="qForm" class="stack">${a.questions.map((q, i) => `<label class="f">${esc(q.label)}<textarea name="q${i}" maxlength="1500" placeholder="Ta réponse, en quelques phrases…" ${editable ? "" : "disabled"}>${esc(q.answer || "")}</textarea></label>`).join("")}
+          <p style="margin:0;font-size:14px">Le recruteur pose ${a.questions.length > 1 ? "ces questions" : "cette question"}. CandiPilot n'envoie jamais une réponse que tu n'as pas relue et enregistrée.</p>
+          ${editable && openQ.length && a.ai_enabled ? `<div class="row" style="flex-wrap:wrap"><button class="btn btn-ai btn-sm" type="button" id="doSuggest">${svg("spark", 15, 2)}Proposer des réponses avec l'IA</button>
+            <span class="hint">Des brouillons à partir de ton profil et de l'offre : relis-les et corrige-les avant d'enregistrer.</span></div>` : ""}
+          <form id="qForm" class="stack">${a.questions.map((q, i) => `<label class="f">${esc(q.label)}<textarea name="q${i}" maxlength="1500" placeholder="Ta réponse, en quelques phrases…" ${editable ? "" : "disabled"}>${esc(q.answer || "")}</textarea><span class="hint qnote" data-q="${i}"></span></label>`).join("")}
             ${editable ? `<button class="btn btn-ghost" type="submit" style="align-self:flex-start">Enregistrer mes réponses</button>` : ""}</form>
         </section>` : ""}
         ${a.detail && !["echec", "incertaine"].includes(a.statut) ? `<p class="hint" style="margin:0">Robot : ${esc(a.detail)}</p>` : ""}
@@ -453,6 +458,22 @@ async function applicationView(id) {
 
   $app.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => act(() => api(`/api/applications/${id}`, { method: "PUT", body: { mode: b.dataset.mode } })).then(route));
   document.getElementById("cvSel")?.addEventListener("change", (e) => act(() => api(`/api/applications/${id}`, { method: "PUT", body: { cv_document_id: e.target.value } }), "CV mis à jour.").then(route));
+  // Brouillons de l'IA : placés dans les champs vides, jamais enregistrés sans le clic du candidat.
+  document.getElementById("doSuggest")?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.innerHTML = '<span class="spin"></span> L\'IA rédige…';
+    try {
+      const { answers } = await act(() => api(`/api/applications/${id}/suggest`, { method: "POST" }));
+      let n = 0;
+      a.questions.forEach((q, i) => {
+        const s = answers.find((x) => x.label === q.label), ta = document.querySelector(`#qForm textarea[name="q${i}"]`), note = document.querySelector(`.qnote[data-q="${i}"]`);
+        if (!s || !ta || ta.value.trim()) return;
+        if (s.answer) { ta.value = s.answer; ta.classList.add("ai-draft"); n++; }
+        if (note) note.textContent = s.answer ? "Brouillon de l'IA : relis et corrige." : `À compléter par toi : ${s.missing || "information manquante"}.`;
+      });
+      toast(n ? `${n} brouillon(s) proposé(s) : relis-les, puis « Enregistrer mes réponses ».` : "L'IA n'a pas assez d'informations : réponds toi-même.");
+    } catch { /* message d'erreur déjà affiché */ }
+    b.disabled = false; b.innerHTML = `${svg("spark", 15, 2)}Proposer des réponses avec l'IA`;
+  });
   document.getElementById("qForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -485,6 +506,7 @@ async function applicationView(id) {
   on("doIgnore", () => act(() => api(`/api/applications/${id}/ignore`, { method: "POST" }), "Offre ignorée.").then(() => go("#/envoi")));
   on("doRestore", () => act(() => api(`/api/applications/${id}/restore`, { method: "POST" }), "Offre restaurée.").then(route));
   on("doRetry", () => act(() => api(`/api/applications/${id}/retry`, { method: "POST" }), "Dossier remis dans le récapitulatif d'envoi.").then(route));
+  on("doResume", () => act(() => api(`/api/applications/${id}/resume`, { method: "POST" }), "Envoi repris : le robot recommence.").then(route));
   on("doVerify", () => act(() => api(`/api/applications/${id}/verify`, { method: "POST" }), "Vérification lancée.").then(route));
   on("doMarkSent", () => { if (confirm("Confirmes-tu avoir envoyé cette candidature toi-même ?")) act(() => api(`/api/applications/${id}/mark-sent`, { method: "POST" }), "Candidature marquée comme envoyée.").then(route); });
   on("doModify", () => document.querySelector("#qForm textarea, #cvSel, [data-mode]")?.focus());
@@ -510,6 +532,7 @@ function actionsFor(a, busy) {
     ${toRecap}
     <div class="row"><button class="btn btn-quiet" style="flex:1" id="doUnselect">Retirer de la sélection</button><button class="btn btn-quiet" style="flex:1" id="doPrepare">Relire le formulaire</button></div>`;
   if (s === "echec") return `<button class="btn btn-primary" id="doRetry">Reprendre</button>${a.apply_type === "jobteaser" ? '<button class="btn btn-ghost" id="doVerify">Vérifier sur JobTeaser</button>' : ""}<a class="btn btn-ghost" href="${esc(a.url)}" target="_blank" rel="noopener">Ouvrir l'offre</a><button class="btn btn-ghost" id="doMarkSent">Je l'ai envoyée moi-même</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
+  if (s === "attente_utilisateur") return `<a class="btn btn-ghost" href="${esc(a.url)}" target="_blank" rel="noopener">Ouvrir l'offre</a><button class="btn btn-primary" id="doResume">Reprendre l'envoi</button><button class="btn btn-ghost" id="doMarkSent">Je l'ai envoyée moi-même</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
   if (s === "incertaine") return `<button class="btn btn-primary" id="doVerify">Vérifier sur JobTeaser</button><button class="btn btn-ghost" id="doMarkSent">Je l'ai envoyée</button><button class="btn btn-quiet" id="doIgnore">Ignorer</button>`;
   return "";
 }
@@ -528,10 +551,10 @@ function statusHelp(a, openQ) {
 let boardMode = localStorage.getItem("cp_board") || "kanban";
 async function applicationsView() {
   const apps = await api("/api/applications");
-  const attention = apps.filter((a) => ["a_valider", "echec", "incertaine"].includes(a.statut)).length;
+  const attention = apps.filter((a) => ["a_valider", "echec", "incertaine", "attente_utilisateur"].includes(a.statut)).length;
   const lanes = [
     ["À préparer", ["qualifiee", "decouverte"]], ["En préparation", ["preparation"]], ["En attente de validation", ["a_valider"]],
-    ["En cours d'envoi", ["soumission", "incertaine"]], ["Envoyées", ["confirmee"]], ["Échec / ignorées", ["echec", "ignoree"]],
+    ["En cours d'envoi", ["soumission", "incertaine", "attente_utilisateur"]], ["Envoyées", ["confirmee"]], ["Échec / ignorées", ["echec", "ignoree"]],
   ];
   const sub = (a) => a.statut === "qualifiee" || a.statut === "decouverte" ? `Trouvée ${ago(a.created_at)} · ${a.score} %`
     : a.statut === "a_valider" ? (a.mode === "manual" ? "Envoi manuel" : a.open_questions ? `${a.open_questions} question(s) ouverte(s)` : "CV et lettre prêts")

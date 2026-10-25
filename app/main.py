@@ -800,7 +800,34 @@ def get_application(app_id: str, user=CurrentUser):
         a["blockers"], a["warnings"] = workflow.blockers(c, raw, user["id"], pr)
         lettre = workflow.default_doc(c, user["id"], "lettre")
         a["imported_letter"] = {"id": lettre["id"], "name": lettre["name"]} if lettre else None
+    a["ai_enabled"] = llm.enabled()
     return a
+
+
+@app.post("/api/applications/{app_id}/suggest")
+def suggest_answers(app_id: str, user=CurrentUser):
+    """Brouillons de réponse de Claude aux questions du recruteur encore sans réponse. Rien n'est enregistré :
+    le candidat relit, corrige, puis enregistre lui-même."""
+    if not llm.enabled():
+        raise HTTPException(503, "L'assistant IA n'est pas activé sur ce serveur.")
+    with db.tx() as c:
+        a = _app_or_404(c, app_id, user["id"])
+        labels = [q["label"] for q in a["questions"] if not q.get("answer", "").strip()]
+        if not labels:
+            raise HTTPException(409, "Toutes les questions ont déjà une réponse.")
+        if llm.budget_left(c, user["id"]) < llm.ANSWER_COST:
+            raise HTTPException(429, "Limite quotidienne de l'assistant IA atteinte : réessaie demain.")
+        ctx = robot.load_context(c, user["id"])
+        offer = db.row(c.execute("SELECT * FROM offers WHERE id=? AND user_id=?", (a["offer_id"], user["id"])).fetchone())
+    try:
+        answers, usage = llm.suggest_answers(labels, ctx, offer)
+    except Exception as e:
+        worker.log_event("suggest_error", user=user["id"], application=app_id, error=f"{type(e).__name__}: {e}"[:300])
+        raise HTTPException(502, "L'assistant IA n'a pas pu répondre. Réessaie dans un moment, ou réponds toi-même.")
+    with db.tx() as c:
+        llm.record_usage(c, user["id"], llm.ANSWER_COST, usage)
+    worker.log_event("suggest_answers", user=user["id"], application=app_id, questions=len(labels), **usage)
+    return {"answers": answers}
 
 
 @app.put("/api/applications/{app_id}")
@@ -910,7 +937,8 @@ def validate(app_id: str, user=CurrentUser):
 
 @app.post("/api/applications/{app_id}/ignore")
 def ignore(app_id: str, user=CurrentUser):
-    _transition(app_id, user["id"], ("decouverte", "qualifiee", "a_valider", "echec", "incertaine"), statut="ignoree", selected=0)
+    _transition(app_id, user["id"], ("decouverte", "qualifiee", "a_valider", "echec", "incertaine", "attente_utilisateur"),
+                statut="ignoree", selected=0)
     return get_application(app_id, user)
 
 
@@ -930,6 +958,21 @@ def retry(app_id: str, user=CurrentUser):
     return get_application(app_id, user)
 
 
+@app.post("/api/applications/{app_id}/resume", status_code=202)
+def resume(app_id: str, user=CurrentUser):
+    """Le candidat a réglé ce qui bloquait le robot (reconnexion, vérification anti-robot) : l'envoi reprend,
+    avec la même clé d'idempotence (pas de double envoi)."""
+    with db.tx() as c:
+        a = _app_or_404(c, app_id, user["id"])
+        if a["statut"] != "attente_utilisateur":
+            raise HTTPException(409, "Cette candidature n'attend pas d'action de ta part.")
+        worker._set_app(c, app_id, statut="soumission", detail="Reprise demandée par toi.")
+        jid = worker.enqueue(c, user["id"], "submit", app_id)
+        db.add_event(c, user["id"], "info", f"Envoi repris : {a['entreprise']}.", app_id)
+    worker.log_event("submit_resumed", user=user["id"], application=app_id)
+    return {"job_id": jid}
+
+
 @app.post("/api/applications/{app_id}/verify", status_code=202)
 def verify(app_id: str, user=CurrentUser):
     with db.tx() as c:
@@ -944,7 +987,7 @@ def verify(app_id: str, user=CurrentUser):
 
 @app.post("/api/applications/{app_id}/mark-sent")
 def mark_sent(app_id: str, user=CurrentUser):
-    a = _transition(app_id, user["id"], ("a_valider", "incertaine", "echec"), statut="confirmee",
+    a = _transition(app_id, user["id"], ("a_valider", "incertaine", "echec", "attente_utilisateur"), statut="confirmee",
                     date_envoi=db.now(), preuve="Déclarée par toi (envoi manuel)")
     with db.tx() as c:
         db.add_event(c, user["id"], "success", f"Candidature marquée comme envoyée : {a['entreprise']}.", app_id)

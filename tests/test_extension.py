@@ -127,8 +127,18 @@ try:
         api.put(BASE + "/api/workflow", data={"submit_mode": "auto", "auto_consent": True})
         subs = lambda: json.loads(urllib.request.urlopen(BASE + "/fake-jobteaser/_submissions").read())
         check(subs() == [], "rien n'est envoyé avant « Valider et démarrer »")
+        captcha_on = lambda oid, on: urllib.request.urlopen(urllib.request.Request(BASE + f"/fake-jobteaser/_captcha/{oid}?on={on}", method="POST"))
+        orsay_oid = next(o["url"] for o in offers if o["entreprise"] == "Banque Orsay").rstrip("/").split("/")[-1]
+        captcha_on(orsay_oid, 1)               # le site affiche une vérification anti-robot sur cette offre
         r = api.post(BASE + "/api/launch")
         check(r.status == 202 and r.json()["started"] == 2, "lancement validé")
+        poll()
+        check(until(lambda: get("Banque Orsay")["statut"] == "attente_utilisateur" and get("Acme SA")["statut"] == "confirmee", 90),
+              "CAPTCHA : le robot s'arrête et passe la main (« À toi de jouer »), l'autre candidature part")
+        check("CAPTCHA" in get("Banque Orsay")["detail"] and len(subs()) == 1, "CAPTCHA jamais contourné : rien n'est envoyé pour cette offre")
+        check(api.post(BASE + f"/api/applications/{apps['Acme SA']}/resume").status == 409, "reprise refusée pour une candidature qui n'attend rien")
+        captcha_on(orsay_oid, 0)               # le candidat a fait la vérification lui-même
+        check(api.post(BASE + f"/api/applications/{apps['Banque Orsay']}/resume").status == 202, "« Reprendre l'envoi » après la vérification")
         poll()
         check(until(lambda: get("Banque Orsay")["statut"] == "confirmee" and get("Acme SA")["statut"] == "confirmee", 90),
               "candidatures envoyées depuis le navigateur, avec preuve")

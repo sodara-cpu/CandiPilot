@@ -139,3 +139,79 @@ def record_usage(conn, user_id: str, n: int, usage: dict) -> None:
     conn.execute("""UPDATE llm_usage SET calls=calls+1, offers=offers+?, input_tokens=input_tokens+?, output_tokens=output_tokens+?,
                     cache_read_tokens=cache_read_tokens+? WHERE user_id=? AND day=?""",
                  (n, usage["input_tokens"], usage["output_tokens"], usage["cache_read_input_tokens"], user_id, day))
+
+
+# ---------- Questions du recruteur : brouillons de réponse (lot 5) ----------
+# Claude propose, le candidat décide : rien n'est enregistré ni envoyé sans sa relecture.
+
+ANSWER_INSTRUCTIONS = """Tu aides un candidat à répondre aux questions d'un formulaire de candidature.
+Pour chaque question, propose un brouillon de réponse, écrit à la première personne, dans la langue de la question.
+Règles :
+- N'utilise QUE les informations du profil et de l'offre fournis. N'invente jamais d'expérience, de diplôme, de
+  chiffre, de date, de nationalité ou d'autorisation de travail.
+- Question factuelle (disponibilité, LinkedIn, ville, langues…) : réponse courte tirée du profil.
+- Question de motivation : 2 à 4 phrases sobres qui relient le profil aux missions de l'offre.
+- Si l'information nécessaire manque (ex. autorisation de travail, prétentions salariales, handicap, situation
+  personnelle) : laisse "answer" vide et indique dans "missing" ce que le candidat doit préciser lui-même.
+Réponds pour toutes les questions, en recopiant exactement leur intitulé dans "label"."""
+
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"label": {"type": "string"}, "answer": {"type": "string"}, "missing": {"type": "string"}},
+                "required": ["label", "answer", "missing"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["answers"],
+    "additionalProperties": False,
+}
+ANSWER_COST = 5          # une demande de brouillons compte comme 5 offres dans le plafond quotidien
+
+
+def _fake_answers(labels: list, ctx: dict) -> tuple:
+    p = ctx["profile"]
+    out = []
+    for l in labels:
+        if "linkedin" in l.lower():
+            out.append({"label": l, "answer": p.get("linkedin", ""), "missing": "" if p.get("linkedin") else "ton profil LinkedIn"})
+        elif any(w in l.lower() for w in ("autoris", "authoriz", "visa", "salaire", "salary")):
+            out.append({"label": l, "answer": "", "missing": "information personnelle : à préciser par toi"})
+        else:
+            out.append({"label": l, "answer": f"(simulation) Brouillon pour « {l} » à partir de ton profil.", "missing": ""})
+    return out, {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+
+
+def suggest_answers(labels: list, ctx: dict, offer: dict) -> tuple:
+    """Brouillons de réponse aux questions du recruteur. Renvoie ([{label, answer, missing}], usage)."""
+    if FAKE:
+        return _fake_answers(labels, ctx)
+    p = ctx["profile"]
+    extra = "\n".join(f"- {k} : {v}" for k, v in (("Prénom", p.get("first_name")), ("LinkedIn", p.get("linkedin")),
+                                                   ("Disponibilité", p.get("availability"))) if v)
+    resp = client().beta.messages.create(
+        model=MODEL,
+        max_tokens=16000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        thinking={"type": "adaptive"},
+        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
+        system=[{"type": "text", "text": ANSWER_INSTRUCTIONS},
+                {"type": "text", "text": profile_text(ctx) + ("\n" + extra if extra else ""), "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": _offer_text(offer) + "\n\nQuestions du formulaire :\n" + "\n".join(f"- {l}" for l in labels)}],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("Claude a refusé de proposer des réponses.")
+    if resp.stop_reason == "max_tokens":
+        raise RuntimeError("Réponse de Claude incomplète (limite de longueur).")
+    text = next(b.text for b in resp.content if b.type == "text")
+    u = resp.usage
+    usage = {"input_tokens": u.input_tokens or 0, "output_tokens": u.output_tokens or 0,
+             "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0}
+    wanted = set(labels)
+    return [a for a in json.loads(text)["answers"] if a.get("label") in wanted], usage

@@ -194,6 +194,8 @@ if with_q:
           "automatique : dossier avec question sans réponse non envoyé")
     item = next(i for i in u.req("GET", "/api/launch")[1]["items"] if i["id"] == with_q[0])
     check(any(b.get("cta") == "Compléter" for b in item["blockers"]), "blocage expliqué avec action « Compléter »")
+check(u.req("POST", f"/api/applications/{q_id}/suggest")[0] == 503 and not u.req("GET", f"/api/applications/{q_id}")[1]["ai_enabled"],
+      "sans clé d'API : pas d'assistant IA, le candidat répond lui-même")
 answer_questions(u, [q_id])
 check(next(i for i in u.req("GET", "/api/launch")[1]["items"] if i["id"] == q_id)["ready"], "réponse donnée : dossier prêt (non envoyé tant qu'on ne relance pas)")
 check(statuses(u, [q_id]) == ["a_valider"], "toujours pas envoyé avant nouvelle confirmation")

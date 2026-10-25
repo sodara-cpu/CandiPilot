@@ -104,7 +104,8 @@ export async function jtInspect() {
   return { kind: "easy", letter: !!dialog.querySelector("input[type='file'][name='coverLetterContent']"), questions, detail: "Formulaire lu." };
 }
 
-// Remplit et (en mode auto) envoie : { status: submitted|skipped|filled_dry|uncertain|failed|login, detail }.
+// Remplit et (en mode auto) envoie : { status: submitted|skipped|filled_dry|uncertain|failed|login|captcha, detail }.
+// Vérification anti-robot (CAPTCHA) : le robot s'arrête et passe la main au candidat, il ne la contourne jamais.
 export async function jtApply(job) {
   const T = "jobad-DetailView__";
   const APPLY_INTERNAL = `[data-testid='${T}CandidateActions__Buttons_apply_internal_candidacy']`;
@@ -131,10 +132,14 @@ export async function jtApply(job) {
     input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true }));
   };
   const succeeded = () => SUCCESS.some((s) => norm(document.body.innerText).includes(s));
+  const CAPTCHA = "iframe[src*='recaptcha'], iframe[src*='hcaptcha'], iframe[src*='challenges.cloudflare.com'], .g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey]";
+  const captcha = () => document.querySelector(CAPTCHA)
+    ? { status: "captcha", detail: "Vérification anti-robot (CAPTCHA) affichée par le site : ouvre l'offre, termine la vérification, puis clique « Reprendre l'envoi »." } : null;
   const filled = [];
 
   await waitFor(() => document.querySelector(`${APPLY_INTERNAL}, ${APPLY_EXTERNAL}`) || succeeded(), 8000);
   if (document.body.innerText.includes("Vous avez postulé à cette offre")) return { status: "skipped", detail: "Déjà postulé (indiqué par JobTeaser)." };
+  if (captcha()) return captcha();
   if (document.querySelector(APPLY_EXTERNAL) && !document.querySelector(APPLY_INTERNAL)) return { status: "failed", detail: "Candidature externe (bouton ↗) — à faire par toi." };
   const btn = document.querySelector(APPLY_INTERNAL) || [...document.querySelectorAll("button")].find((b) => b.innerText.includes("Candidature simplifiée"));
   if (!btn) {
@@ -221,6 +226,7 @@ export async function jtApply(job) {
 
   const detail = "rempli : " + (filled.join(", ") || "rien à remplir");
   if (job.mode === "assisted") return { status: "filled_dry", detail: detail + " ; à toi de cliquer « Postuler maintenant »" };
+  if (captcha()) return captcha();
   const final = dialog.querySelector(APPLY_BUTTON);
   if (!final || final.offsetParent === null) return { status: "failed", detail: detail + " ; bouton « Postuler maintenant » absent (étape supplémentaire ?)" };
   if (final.disabled) return { status: "failed", detail: detail + " ; « Postuler maintenant » inactif (champ obligatoire manquant ?)" };

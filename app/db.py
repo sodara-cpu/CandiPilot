@@ -28,7 +28,8 @@ PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 # Cycle de vie d'une candidature (§3.4).
 STATUSES = ["decouverte", "qualifiee", "a_valider", "preparation", "soumission",
-            "confirmee", "echec", "incertaine", "ignoree"]
+            "confirmee", "echec", "incertaine", "ignoree",
+            "attente_utilisateur"]    # le robot s'est arrêté : connexion expirée, CAPTCHA… (jamais contourné)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (

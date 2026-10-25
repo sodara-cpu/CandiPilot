@@ -80,6 +80,21 @@ for stop in ("refusal", "max_tokens"):
     except RuntimeError:
         check(True, f"« {stop} » détecté : aucune note inventée")
 
+# 3b. Brouillons de réponse aux questions du recruteur (lot 5)
+fake = FakeClient(payload={"answers": [{"label": "Pourquoi nous ?", "answer": "Vos missions en contrôle de gestion…", "missing": ""},
+                                       {"label": "Question inventée", "answer": "x", "missing": ""}]})
+llm._client = fake
+ans, _ = llm.suggest_answers(["Pourquoi nous ?", "Autorisé à travailler en France ?"], ctx, offers[0])
+kw = fake.calls[0]
+check(kw["fallbacks"] == "default" and kw["output_config"]["format"]["schema"] == llm.ANSWER_SCHEMA, "brouillons : sortie validée par schéma, modèle de secours")
+check("N'invente jamais" in kw["system"][0]["text"] and "autorisation de travail" in kw["system"][0]["text"], "consigne : rien d'inventé, infos personnelles laissées au candidat")
+check([a["label"] for a in ans] == ["Pourquoi nous ?"], "réponse à une question qui n'existe pas : ignorée")
+llm._client = FakeClient(stop_reason="refusal")
+try:
+    llm.suggest_answers(["Pourquoi nous ?"], ctx, offers[0]); check(False, "refus")
+except RuntimeError:
+    check(True, "refus de Claude pour les brouillons : erreur claire, rien d'inventé")
+
 # 4. Plafond quotidien par utilisateur
 db.init()
 with db.tx() as c:

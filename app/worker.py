@@ -194,9 +194,13 @@ def finish_submit(job: dict, status: str, detail: str, proof: str = "") -> None:
         elif status == "uncertain":
             _set_app(c, app_id, statut="incertaine", detail=detail)
             db.add_event(c, uid, "warning", f"Envoi non confirmé pour {a['entreprise']} : vérification à faire.", app_id)
-        else:
+        elif status in ("login", "captcha"):
+            # Le robot s'arrête et passe la main : il ne contourne jamais une vérification anti-robot.
             if status == "login":
                 c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
+            _set_app(c, app_id, statut="attente_utilisateur", detail=detail)
+            db.add_event(c, uid, "warning", f"À toi de jouer pour {a['entreprise']} : {detail}", app_id)
+        else:
             _set_app(c, app_id, statut="echec", detail=detail)
             db.add_event(c, uid, "error", f"Échec de l'envoi pour {a['entreprise']} : {detail}", app_id)
 

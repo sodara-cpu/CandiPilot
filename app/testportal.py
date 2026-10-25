@@ -87,6 +87,7 @@ def offer(oid: str, request: Request):
       <h1>{o['title']}</h1><p>{o['company']}</p>
       <div data-testid="{T}CandidacyDetails__start_date">Date de début {o['start']}</div>
       {action}
+      {'<div class="g-recaptcha" data-sitekey="test"></div>' if oid in CAPTCHA else ''}
       <section role="dialog" id="dlg" style="display:none;border:2px solid #333;padding:12px;margin-top:12px">
         <h2>Postuler à l'offre</h2>
         <div id="genderBlock">
@@ -134,6 +135,15 @@ def offer(oid: str, request: Request):
 async def submit(request: Request):
     SUBMISSIONS.append(await request.json())
     return {"ok": True}
+
+
+CAPTCHA: set = set()        # offres sur lesquelles le site affiche une vérification anti-robot
+
+
+@router.post(P + "/_captcha/{oid}")
+def toggle_captcha(oid: str, on: int = 1):
+    (CAPTCHA.add if on else CAPTCHA.discard)(oid)
+    return {"captcha": sorted(CAPTCHA)}
 
 
 @router.get(P + "/_submissions")
