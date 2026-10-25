@@ -9,6 +9,7 @@ PORT=${PORT:-8765}
 TMP=$(mktemp -d)
 export CANDIPILOT_FAKE_ROBOT=1 CANDIPILOT_DATA="$TMP/data"
 export CANDIPILOT_DEFAULT_SOURCES=0   # pas d'appel aux vraies plateformes pendant les tests (voir test_defaults)
+unset FRANCE_TRAVAIL_CLIENT_ID FRANCE_TRAVAIL_CLIENT_SECRET ADZUNA_APP_ID ADZUNA_APP_KEY   # agrégateurs : faux serveurs seulement
 unset ANTHROPIC_API_KEY      # jamais d'appel payant à Claude pendant les tests (simulation : test_llm, test_discovery)
 
 $PY -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" > "$TMP/server.log" 2>&1 &
