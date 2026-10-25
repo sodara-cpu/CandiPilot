@@ -57,9 +57,11 @@ def _shutdown() -> None:
 
 
 @app.get("/healthz", include_in_schema=False)
-def healthz():
-    with db.tx() as c:
-        c.execute("SELECT 1").fetchone()
+def healthz(db_check: int = 0):
+    """Le site répond. Sans ?db_check=1, ne touche pas la base (elle peut rester en veille)."""
+    if db_check:
+        with db.tx() as c:
+            c.execute("SELECT 1").fetchone()
     return {"ok": True}
 
 

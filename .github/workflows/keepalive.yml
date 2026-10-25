@@ -1,0 +1,16 @@
+# Garde le site Render éveillé en journée (offre gratuite : mise en veille après 15 min sans visite).
+# Toutes les 10 min de 6 h à 23 h (heure de Paris) : ~520 h/mois, sous les 750 h gratuites de Render.
+# /healthz ne touche pas la base Neon, qui peut donc rester en veille (quota gratuit préservé).
+name: Réveil du site
+
+on:
+  schedule:
+    - cron: "*/10 5-21 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: curl -sS -m 150 --retry 2 https://candipilot.onrender.com/healthz

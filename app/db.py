@@ -177,14 +177,28 @@ def _pg_schema(sql: str) -> str:
     return re.sub(r"--[^\n]*", "", sql)
 
 
-class _PgConn:
-    """Connexion PostgreSQL qui accepte les requêtes de l'application (syntaxe SQLite)."""
+_pool = None
 
-    def __init__(self):
-        import psycopg
+
+def _pg_pool():
+    """Réserve de connexions ouvertes : ouvrir une connexion sécurisée vers la base coûte près d'une seconde,
+    la réutiliser quelques millisecondes."""
+    global _pool
+    if _pool is None:
         from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
         # prepare_threshold=None : compatible avec les « poolers » (Neon, PgBouncer).
-        self._c = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=20, prepare_threshold=None)
+        _pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=8, max_idle=240, open=True, timeout=30,
+                               check=ConnectionPool.check_connection,   # écarte une connexion fermée par la base
+                               kwargs={"row_factory": dict_row, "prepare_threshold": None, "connect_timeout": 20})
+    return _pool
+
+
+class _PgConn:
+    """Connexion PostgreSQL (prise dans la réserve) qui accepte les requêtes de l'application (syntaxe SQLite)."""
+
+    def __init__(self, conn):
+        self._c = conn
 
     def execute(self, sql: str, params=()):
         return self._c.execute(_pg_sql(sql), tuple(params))
@@ -194,19 +208,7 @@ class _PgConn:
             if stmt.strip():
                 self._c.execute(stmt)
 
-    def commit(self):
-        self._c.commit()
-
-    def rollback(self):
-        self._c.rollback()
-
-    def close(self):
-        self._c.close()
-
-
 def connect():
-    if PG:
-        return _PgConn()
     DATA_DIR.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -217,6 +219,10 @@ def connect():
 
 @contextmanager
 def tx():
+    if PG:
+        with _pg_pool().connection() as conn:      # valide (commit) en sortie, annule en cas d'erreur
+            yield _PgConn(conn)
+        return
     conn = connect()
     try:
         yield conn
