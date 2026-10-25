@@ -33,6 +33,25 @@ flowchart LR
    explore les sites, transforme ce dont il est sûr en nouveaux exemples, puis se réentraîne. Le jeu
    de validation l'empêche de « désapprendre » : un modèle moins bon est refusé.
 
+## Le juge : de vrais formulaires vérifiés à la main
+
+`donnees/verifiees/` contient 9 vrais formulaires de candidature (Greenhouse, Workable, Phenom, Eightfold… :
+266 champs vérifiés un par un) et 10 pages qui n'en sont pas (pages produit, recherche, pages légales).
+Le juge ne sert **jamais** à l'entraînement : il note chaque nouvelle version, qui n'est gardée que si
+elle ne recule ni sur les champs, ni sur la distinction « formulaire / pas formulaire ».
+
+Leçon du premier apprentissage autonome (nuit du 24 au 25 octobre 2026) : sans juge réel, le modèle s'est
+dégradé tout seul (24 % de champs justes sur le juge) en apprenant ses propres erreurs avec une confiance
+de 100 % (tous les boutons pris pour « Suivant », pages produit prises pour des formulaires). Archivé dans
+`donnees/archive-2026-10-25/`. Corrections : lecture de la seule zone du formulaire (sans menus, bandeaux
+cookies, recherches), exemples d'entraînement réalistes, détection stricte des formulaires, juge réel.
+
+| Sur le juge (vrais sites) | Champs justes | Pages bien classées |
+|---|---|---|
+| Règles de base | 76,7 % | 100 % |
+| Ancien modèle (après la nuit) | 24,4 % | 100 % |
+| Nouveau modèle (départ) | 92,9 % | 100 % |
+
 ## Résultats (sites générés en local)
 
 | Mesure | Règles / hasard | Réseau |

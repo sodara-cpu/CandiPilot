@@ -885,10 +885,28 @@ async function accountView() {
     <section class="card pad stack"><h2>Appareils connectés</h2>
       <div class="spread"><span class="sub" style="font-size:14px">${ME.sessions} session${ME.sessions > 1 ? "s" : ""} ouverte${ME.sessions > 1 ? "s" : ""} (14 jours maximum chacune).</span>
         <button class="btn btn-ghost" id="outAll">Se déconnecter partout</button></div></section>
+    ${ME.owner ? `<section class="card pad stack" id="mailCard"><div class="spread"><h2>E-mails (administrateur)</h2>
+      <button class="btn btn-ghost" id="mailTest">M'envoyer un e-mail de test</button></div>
+      <div id="mailInfo" class="hint">Chargement des réglages…</div></section>` : ""}
     <section class="card pad stack"><h2>Supprimer mon compte</h2>
       <div class="spread"><span class="sub" style="font-size:14px">Efface ton profil, tes documents et ton historique.</span><button class="btn btn-danger" id="delAcc">Supprimer mon compte</button></div></section>`);
   document.getElementById("em").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/email", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Adresse modifiée.").then(async () => { ME = await api("/api/auth/me"); route(); }); };
   document.getElementById("pw").onsubmit = (e) => { e.preventDefault(); act(() => api("/api/auth/password", { method: "PUT", body: Object.fromEntries(new FormData(e.target)) }), "Mot de passe modifié. Tes autres appareils sont déconnectés.").then(async () => { e.target.reset(); ME = await api("/api/auth/me"); route(); }); };
+  if (ME.owner) {
+    const show = (m, res) => {
+      const rows = [["Méthode", m.method], ["Clé API Brevo", m.brevo_api_key], ["Serveur SMTP", m.smtp_host], ["Port", m.smtp_port],
+        ["Identifiant SMTP", m.smtp_user], ["Mot de passe SMTP", m.smtp_password + (m.smtp_password_spaces ? " ⚠ contient des espaces" : "")], ["Expéditeur", m.sender]];
+      document.getElementById("mailInfo").innerHTML = (res ? (res.ok ? '<div class="blk ok">✓ E-mail de test envoyé : regarde ta boîte (et les spams).</div>'
+        : `<div class="blk">✗ ${esc(res.error)}</div>`) : "") +
+        `<table style="margin-top:8px">${rows.map(([k, v]) => `<tr><td class="sub">${k}</td><td><code>${esc(v)}</code></td></tr>`).join("")}</table>`;
+    };
+    api("/api/admin/mail").then((m) => show(m)).catch(() => {});
+    document.getElementById("mailTest").onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = "Envoi…";
+      const r = await api("/api/admin/mail/test", { method: "POST" }).catch((err) => ({ ok: false, error: err.message }));
+      show(r, r); e.target.disabled = false; e.target.textContent = "M'envoyer un e-mail de test";
+    };
+  }
   document.getElementById("outAll").onclick = () => { if (confirm("Te déconnecter de tous les appareils, y compris celui-ci ?")) act(() => api("/api/auth/logout-all", { method: "POST" })).then(() => { ME = null; GUIDE = null; go("#/login"); }); };
   document.getElementById("delAcc").onclick = () => modal(`<h2>Supprimer mon compte</h2><p class="sub">Action définitive. Saisis ton mot de passe pour confirmer.</p>
     <form id="da" class="form"><input type="password" name="password" required autocomplete="current-password" aria-label="Mot de passe">

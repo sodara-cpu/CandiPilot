@@ -68,7 +68,7 @@ learner = Apprenant(fresh=True, n_synth=120, boot_epochs=8)
 before = learner.best
 learner.pseudo = [dict(p, champs=[dict(f, etiquette="other") for f in p["champs"]]) for p in labeled_pages(200, seed=7)]
 acc, kept = learner.improve()
-check(not kept and learner.best == before, f"modèle dégradé ({acc:.1%} < {before:.1%}) refusé")
+check(not kept and learner.best == before, f"modèle dégradé ({acc:.1%} < {before[0]:.1%}) refusé")
 
 # 4. Exploration autonome de sites générés : apprise vs au hasard.
 sites = [{"nom": f"Site {i}", "url": build_site(tmp / f"site{i}", seed=200 + i).as_uri()} for i in range(3)]

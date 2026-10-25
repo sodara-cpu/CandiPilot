@@ -1,0 +1,28 @@
+{
+ "url": "https://www.airbus.com/de/careers/datenschutz",
+ "site": "Airbus_legal",
+ "titre": "Datenschutzhinweis - Recruitment | Airbus",
+ "page_type": "autre",
+ "verifiee": true,
+ "champs_verifies": false,
+ "champs": [
+  {
+   "tag": "input",
+   "type": "checkbox",
+   "name": "",
+   "id": "drawer2103274746-state",
+   "placeholder": "",
+   "aria_label": "",
+   "autocomplete": "",
+   "accept": "",
+   "required": false,
+   "label": "",
+   "context": "Direkt zum Inhalt Skip to search Airbus",
+   "text": "",
+   "options": [],
+   "zone": "page",
+   "form": null,
+   "etiquette": "other"
+  }
+ ]
+}

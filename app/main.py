@@ -211,6 +211,27 @@ def change_email(body: EmailIn, user=CurrentUser):
     return {"email": email}
 
 
+@app.get("/api/admin/mail")
+def admin_mail(user=CurrentUser):
+    with db.tx() as c:
+        if not _is_owner(c, user["id"]):
+            raise HTTPException(403, "Réservé au propriétaire.")
+    return auth.mail_config()
+
+
+@app.post("/api/admin/mail/test")
+def admin_mail_test(user=CurrentUser):
+    """Envoie un e-mail de test au propriétaire et renvoie l'erreur exacte en cas d'échec."""
+    with db.tx() as c:
+        if not _is_owner(c, user["id"]):
+            raise HTTPException(403, "Réservé au propriétaire.")
+    try:
+        sent = auth.send_mail(user["email"], "CandiPilot : e-mail de test", "Si tu lis ce message, les e-mails de CandiPilot fonctionnent.")
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"[:500], **auth.mail_config()}
+    return {"ok": sent, "error": "" if sent else "Aucune méthode d'envoi configurée.", **auth.mail_config()}
+
+
 def _is_owner(c, uid: str) -> bool:
     """Le premier compte créé est celui du propriétaire du robot (config/profile.yaml)."""
     first = c.execute("SELECT id FROM users ORDER BY created_at, rowid LIMIT 1").fetchone()

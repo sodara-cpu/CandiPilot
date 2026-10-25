@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-from extraction import extract_fields
+from extraction import application_fields, extract_fields
 
 # Pour chaque étiquette : libellés possibles (français / anglais), noms techniques et type HTML.
 FIELDS = {
@@ -18,8 +18,9 @@ FIELDS = {
     "full_name": (["Nom complet", "Full name", "Name", "Nom et prénom"], ["fullName", "name", "full_name", "candidate_name"], "text"),
     "email": (["E-mail", "Email address", "Adresse e-mail", "Courriel", "Your email"], ["email", "mail", "courriel", "emailAddress"], "email"),
     "phone": (["Téléphone", "Phone", "Mobile phone", "Numéro de téléphone", "Portable"], ["phone", "tel", "mobile", "telephone", "phoneNumber"], "tel"),
-    "linkedin": (["Profil LinkedIn", "LinkedIn URL", "LinkedIn"], ["linkedin", "linkedin_url", "urls[LinkedIn]"], "url"),
-    "city": (["Ville", "City", "Adresse", "Location", "Code postal"], ["city", "ville", "location", "address", "zip"], "text"),
+    "linkedin": (["Profil LinkedIn", "LinkedIn URL", "LinkedIn", "Lien vers ton LinkedIn", "LinkedIn profile URL"], ["linkedin", "linkedin_url", "urls[LinkedIn]", "question_li"], "url"),
+    "city": (["Ville", "City", "Adresse", "Location", "Code postal", "Ville actuelle", "Location (city)", "Postal code",
+              "Street address", "Département", "Lieu de résidence"], ["city", "ville", "location", "address", "zip", "postal"], "text"),
     "cv": (["CV", "Votre CV", "Resume/CV", "Curriculum vitae", "Upload your resume", "Joindre votre CV"], ["resume", "cv", "file_cv", "attachment_resume"], "file"),
     "cover_file": (["Lettre de motivation (fichier)", "Cover letter", "Joindre votre lettre de motivation", "Upload cover letter"], ["cover_letter", "lettre", "file_lm", "coverLetter"], "file"),
     "cover_text": (["Lettre de motivation", "Message au recruteur", "Cover letter (text)", "Why do you want to join us?", "Pourquoi nous rejoindre ?"], ["motivation", "message", "coverLetterText", "why_us"], "textarea"),
@@ -29,6 +30,31 @@ FIELDS = {
     "consent": (["J'accepte la politique de confidentialité", "I agree to the privacy policy", "J'accepte le traitement de mes données (RGPD)"], ["consent", "gdpr", "privacy", "rgpd"], "checkbox"),
     "other": (["Comment avez-vous connu ce poste ?", "Salaire souhaité", "Nationalité", "How did you hear about us?", "Permis de conduire"], ["source", "salary", "nationality", "custom_q1", "question_3"], "text"),
 }
+# Ce que les vrais sites mettent AUTOUR et DANS le formulaire, et qui n'est à remplir ni à cliquer (« other »).
+NOISE_IN_FORM = [
+    '<button type="button">{}</button>', '<a role="button"><button type="button">{}</button></a>',
+]
+NOISE_BUTTONS = ["Remplir avec LinkedIn", "Autofill with LinkedIn", "Autofill my application", "Joindre", "Attach", "Upload",
+                 "Effacer", "Clear", "Supprimer le fichier", "Remove file", "Toggle flyout", "Select country", "Ajouter",
+                 "Add another", "Enter manually", "Saisir manuellement", "Dropbox", "Google Drive", "Afficher plus", "Show more"]
+NOISE_SELECTS = [("Pays", "country"), ("Country *", "country"), ("Langue", "language"), ("Preferred language", "language"),
+                 ("Nationalité", "nationality"), ("Indicatif", "phone_country"), ("Country code", "country_code")]
+NOISE_TEXTS = [("How did you hear about us?", "source"), ("Salaire souhaité", "salary"), ("Website", "website"),
+               ("Portfolio", "portfolio"), ("Pronouns", "pronouns"), ("Entreprise actuelle", "org"), ("Prénom d'usage", "preferred"),
+               ("Nickname", "nickname"), ("GitLab / GitHub", "git"), ("Poste", "extension"), ("Numéro de rue", "street_number"),
+               ("Êtes-vous autorisé(e) à travailler en France ?", "q_work"), ("Do you need a work permit?", "q_permit"),
+               ("Seriez-vous prêt(e) à déménager ?", "q_move"), ("Have you applied to us before?", "q_before"),
+               ("Nom de votre référent", "referrer"), ("Who referred you?", "referral")]
+NOISE_TEXTAREAS = ["Informations complémentaires", "Additional comments", "Décrivez un projet dont vous êtes fier",
+                   "Tell us about a challenge you solved", "Autre chose à ajouter ?", "Accessibility needs"]
+MARKETING_CHECKS = ["Recevoir des alertes emploi par SMS", "Envoyez-moi des offres par e-mail", "Join our talent community",
+                    "Keep me informed about future openings", "Enregistrer mes réponses pour mes prochaines candidatures",
+                    "Recevoir la newsletter", "Notify me via WhatsApp"]
+COOKIE_BUTTONS = ["Accepter tout", "Tout refuser", "Accept all cookies", "Reject all", "Manage preferences", "Personnaliser",
+                  "Continue without accepting", "Paramètres des cookies"]
+NAV_BUTTONS = ["Menu", "English", "Français", "Mes offres sauvegardées", "My Saved Jobs", "Connexion", "Sign in", "Search",
+               "Rechercher", "Navigation menu", "Close", "Fermer", "Share", "Partager", "Save Job"]
+
 BUTTONS = {"submit": ["Postuler", "Envoyer ma candidature", "Submit application", "Apply", "Soumettre"],
            "next": ["Suivant", "Continuer", "Next", "Continue"]}
 NAV = {  # Liens : texte des liens utiles et des liens « pièges » (sans formulaire derrière).
@@ -47,12 +73,45 @@ def form_html(rng: random.Random, labels=None) -> tuple:
         labels = names + ["email", "cv"] + extra + (["consent"] if rng.random() < 0.6 else [])
         rng.shuffle(labels)
     parts, truth = [f"<h2>{rng.choice(['Votre candidature', 'Apply', 'Formulaire de candidature', 'Postuler'])}</h2><form>"], []
+    # Éléments parasites glissés dans le formulaire : à ne jamais remplir ni cliquer.
+    labels = list(labels)
+    for _ in range(rng.randint(0, 4)):
+        labels.insert(rng.randrange(len(labels) + 1), "_noise")
     for i, lab in enumerate(labels):
+        if lab == "_noise":
+            kind, n = rng.random(), 1
+            if kind < 0.25:
+                parts.append(rng.choice(NOISE_IN_FORM).format(rng.choice(NOISE_BUTTONS)))
+            elif kind < 0.4:
+                text, name = rng.choice(NOISE_SELECTS)
+                parts.append(f'<label>{text}<select name="{name}"><option>—</option><option>France</option></select></label>')
+            elif kind < 0.6:
+                text, name = rng.choice(NOISE_TEXTS)
+                parts.append(f'<label>{text}<input name="{name}"></label>')
+            elif kind < 0.72:     # liste déroulante « maison » : champ, bouton d'ouverture, champ de saisie sans libellé
+                text, name = rng.choice(NOISE_TEXTS + NOISE_SELECTS)
+                parts.append(f'<label>{text}<input name="{name}"></label><button type="button">Toggle flyout</button><input>')
+                n = 3
+            elif kind < 0.84:     # cases marketing (pas un consentement légal)
+                parts.append(f'<label><input type="checkbox" name="optin{i}"> {rng.choice(MARKETING_CHECKS)}</label>')
+            elif kind < 0.92:     # question oui / non
+                q = rng.choice(NOISE_TEXTS)[0]
+                parts.append(f'<p>{q}</p><label><input type="radio" name="r{i}"> {rng.choice(["Oui", "Yes"])}</label>'
+                             f'<label><input type="radio" name="r{i}"> {rng.choice(["Non", "No"])}</label>')
+                n = 2
+            else:
+                parts.append(f'<label>{rng.choice(NOISE_TEXTAREAS)}<textarea name="info{i}"></textarea></label>')
+            truth.extend(["other"] * n)
+            continue
         texts, names, kind = FIELDS[lab]
         text, name, fid = rng.choice(texts), rng.choice(names), f"f{rng.randint(100, 999)}_{i}"
         style = rng.random()
         if kind == "textarea":
             field = f'<textarea id="{fid}" name="{name}"></textarea>'
+        elif kind == "select" and rng.random() < 0.35:   # genre en liste « maison » (champ + bouton)
+            parts.append(f'<label>{text}<input id="{fid}" name="{name}"></label><button type="button">Toggle flyout</button>')
+            truth.extend([lab, "other"])
+            continue
         elif kind == "select":
             field = f'<select id="{fid}" name="{name}"><option value="">—</option><option>M.</option><option>Mme</option></select>'
         elif kind == "checkbox":
@@ -69,6 +128,10 @@ def form_html(rng: random.Random, labels=None) -> tuple:
         else:
             parts.append(f'<label>{text}{field}</label>')
         truth.append(lab)
+    if rng.random() < 0.25:      # formulaire en plusieurs étapes : le dernier bouton est « Suivant » (type submit)
+        parts.append(f'<button type="submit">{rng.choice(BUTTONS["next"])}</button></form>')
+        truth.append("next")
+        return "".join(parts), truth
     if rng.random() < 0.3:
         parts.append(f'<button type="button">{rng.choice(BUTTONS["next"])}</button>')
         truth.append("next")
@@ -77,12 +140,24 @@ def form_html(rng: random.Random, labels=None) -> tuple:
     return "".join(parts), truth
 
 
+def page_html(rng: random.Random, body: str) -> str:
+    """Page complète comme sur un vrai site : menu, recherche, bandeau cookies, contenu, pied de page + newsletter."""
+    nav = "".join(f"<button>{b}</button>" for b in rng.sample(NAV_BUTTONS, 4))
+    search = '<form role="search"><input type="search" placeholder="Rechercher une offre"><input placeholder="Ville, région"><button>Rechercher</button></form>' \
+        if rng.random() < 0.6 else ""
+    cookie = f'<div id="{rng.choice(["onetrust-banner-sdk", "didomi-popup", "cookie-banner", "axeptio_overlay"])}">' + \
+        "".join(f"<button>{b}</button>" for b in rng.sample(COOKIE_BUTTONS, 3)) + "</div>" if rng.random() < 0.7 else ""
+    footer = '<footer><form><input type="email" placeholder="Votre e-mail"><button>S\'abonner</button></form></footer>' \
+        if rng.random() < 0.5 else "<footer><a href='#'>Mentions légales</a></footer>"
+    return f"<header>{nav}{search}</header>{cookie}<main>{body}</main>{footer}"
+
+
 def labeled_pages(n: int, seed: int = 0) -> list:
-    """n formulaires au format des pages collectées (champs + étiquette vérifiée)."""
+    """n formulaires au format des pages collectées (champs du formulaire de candidature + étiquette vérifiée)."""
     rng, pages = random.Random(seed), []
     for i in range(n):
-        html, truth = form_html(rng)
-        fields = extract_fields(html)
+        form, truth = form_html(rng)
+        fields = application_fields(extract_fields(page_html(rng, form)))
         assert len(fields) == len(truth), (len(fields), len(truth))
         for f, lab in zip(fields, truth):
             f["etiquette"] = lab
@@ -111,7 +186,7 @@ def build_site(folder: Path, seed: int, n_offers: int = 4) -> Path:
         body = [link(f"info{j}.html", noise[j]) for j in rng.sample(range(len(noise)), 3)]
         body.insert(rng.randrange(4), link(f"postuler{k}.html", apply_text))
         (folder / f"offre{k}.html").write_text(page(f"Analyste {k}", "<p>Description du poste.</p>" + "".join(body)), encoding="utf-8")
-        (folder / f"postuler{k}.html").write_text(page("Candidature", form_html(rng)[0]), encoding="utf-8")
+        (folder / f"postuler{k}.html").write_text(page("Candidature", page_html(rng, form_html(rng)[0])), encoding="utf-8")
         offers.append(link(f"offre{k}.html", f"Stage analyste financier {k}"))
     (folder / "carrieres.html").write_text(page("Carrières", "".join(nav[:2] + offers + nav[2:4])), encoding="utf-8")
     return folder / "index.html"

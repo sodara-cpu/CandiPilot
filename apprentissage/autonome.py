@@ -31,7 +31,7 @@ import yaml
 
 import collecte
 from evaluation import load_pages
-from extraction import extract_fields
+from extraction import application_fields, extract_fields
 from modeles.reseau import ModeleReseau, Navigateur
 from synthetique import build_site, labeled_pages
 
@@ -53,15 +53,23 @@ SKIP = re.compile(r"^(mailto|tel|javascript):|facebook\.com|twitter\.com|x\.com/
                   r"instagram\.com|youtube\.com|\.(pdf|jpg|png|zip)(\?|$)", re.I)
 
 
-def is_application_form(labels: list) -> bool:
-    return "submit" in labels and len(CORE & set(labels)) >= 2
+APPLY_PAGE = re.compile(r"apply|candidat|postul|application|jobapply|/job|/jobs|greenhouse|lever\.co|workday|eightfold|"
+                        r"smartrecruiters|workable|taleo|successfactors|icims|teamtailor|recruitee", re.I)
 
 
-def classify(title: str, html: str, champs: list, labels: list) -> str:
+def is_application_form(labels: list, url: str = "", title: str = "") -> bool:
+    """Formulaire de candidature : un champ CV, ou prénom + nom + e-mail sur une page de candidature.
+    (Un formulaire de contact ou de newsletter ne suffit pas.)"""
+    l = set(labels)
+    identity = "email" in l and ({"first_name", "last_name"} <= l or "full_name" in l)
+    return ("cv" in l and ("email" in l or identity)) or (identity and bool(APPLY_PAGE.search(url + " " + title)))
+
+
+def classify(title: str, html: str, champs: list, labels: list, url: str = "") -> str:
     """formulaire | connexion | bloquee | page"""
     if BLOCKED.search(title or "") or (len(html) < 2000 and BLOCKED.search(html)):
         return "bloquee"
-    if is_application_form(labels):
+    if is_application_form(labels, url, title):
         return "formulaire"
     if any(c["type"] == "password" for c in champs):
         return "connexion"
@@ -88,6 +96,8 @@ def follow(link: str, text: str, allowed: set) -> bool:
 def accuracy(model, pages: list) -> float:
     ok = total = 0
     for p in pages:
+        if p.get("champs_verifies") is False:          # page « autre » : seuls ses champs ne sont pas vérifiés
+            continue
         for f, g in zip(p["champs"], model.predire(p["champs"])):
             total += 1
             ok += g == f["etiquette"]
@@ -112,13 +122,24 @@ def diagnose(r: dict, kinds: dict, platforms: set, budget: int, more_links: bool
     return "Aucun lien vers un formulaire de candidature trouvé depuis cette page de départ."
 
 
+def page_accuracy(model, pages: list) -> float:
+    """Part des pages bien classées : vrai formulaire de candidature, ou non."""
+    if not pages:
+        return 1.0
+    ok = sum(is_application_form(model.predire(p["champs"]), p.get("url", ""), p.get("titre", "")) == (p.get("page_type") == "candidature")
+             for p in pages)
+    return ok / len(pages)
+
+
 class Apprenant:
     def __init__(self, seuil: float = 0.95, epsilon: float = 0.15, seed: int = 0, fresh: bool = False,
-                 n_synth: int = 300, boot_epochs: int = 20, persist: bool = True):
+                 n_synth: int = 400, boot_epochs: int = 20, persist: bool = True):
         self.seuil, self.epsilon, self.rng, self.persist = seuil, epsilon, random.Random(seed), persist
-        self.human = load_pages(DATA)
+        # Juge : vrais sites vérifiés à la main (donnees/verifiees), jamais utilisés pour l'entraînement.
+        self.judge = load_pages(DATA / "verifiees")
+        self.human = [p for p in load_pages(DATA) if p not in self.judge]
         self.synthetic = labeled_pages(n_synth, seed=seed + 1)
-        self.validation = self.human + labeled_pages(80, seed=seed + 99)
+        self.validation = self.judge or labeled_pages(80, seed=seed + 99)
         self.pseudo = [] if fresh else [json.loads(l) for l in PSEUDO.read_text(encoding="utf-8").splitlines()] if PSEUDO.exists() else []
         self.fields = ModeleReseau()
         self.links = Navigateur()
@@ -128,8 +149,12 @@ class Apprenant:
             self.fields.sauver()
         if not fresh:
             self.links.charger()
-        self.best = accuracy(self.fields, self.validation)
-        print(f"Précision de départ sur la validation : {self.best:.1%}")
+        self.best = self.score(self.fields)
+        print(f"Départ sur le juge (vrais sites) : champs {self.best[0]:.1%}, pages {self.best[1]:.1%}")
+
+    def score(self, model) -> tuple:
+        """(précision sur les champs des vrais formulaires, précision formulaire / pas formulaire)."""
+        return accuracy(model, self.validation), page_accuracy(model, [p for p in self.validation if p.get("page_type")])
 
     def _train(self, model, epochs: int) -> None:
         pages = self.synthetic + self.human + self.pseudo
@@ -163,10 +188,10 @@ class Apprenant:
             parents[url] = parent
             if parent is not None:
                 self.links.observe(url, (href, text), depth)
-            champs = extract_fields(html)
+            champs = application_fields(extract_fields(html))      # seulement la zone du formulaire
             probs = self.fields.probabilites(champs)
             labels = [l for l, _ in probs]
-            kind = classify(title, html, champs, labels)
+            kind = classify(title, html, champs, labels, url)
             kinds[kind] += 1
             self._page_log({"site": name, "url": url, "titre": (title or "")[:100], "type": kind, "profondeur": depth,
                             "lien": text[:80], "champs": len(champs), "liens": len(links),
@@ -228,13 +253,14 @@ class Apprenant:
 
     # ---------- amélioration du réseau des champs ----------
     def improve(self) -> tuple:
+        """Réentraîne une copie ; gardée seulement si elle ne recule ni sur les champs ni sur les pages du juge."""
         candidate = copy.deepcopy(self.fields)
         self._train(candidate, epochs=4)
-        acc = accuracy(candidate, self.validation)
-        accepted = acc >= self.best - 0.005
+        fields_acc, pages_acc = self.score(candidate)
+        accepted = fields_acc >= self.best[0] - 0.005 and pages_acc >= self.best[1] - 1e-9
         if accepted:
-            self.fields, self.best = candidate, max(self.best, acc)
-        return acc, accepted
+            self.fields, self.best = candidate, (max(self.best[0], fields_acc), max(self.best[1], pages_acc))
+        return fields_acc, accepted
 
     def save(self, persist: bool = True) -> None:
         if not persist:

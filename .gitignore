@@ -17,6 +17,8 @@ data/
 
 .DS_Store
 data-recette/
-apprentissage/donnees/
+apprentissage/donnees/*
+!apprentissage/donnees/verifiees/
+apprentissage/donnees/verifiees/*.html
 apprentissage/modeles/sauvegardes/
 .env

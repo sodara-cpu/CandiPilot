@@ -1,0 +1,88 @@
+{
+ "Adyen": {
+  "3": "other",
+  "5": "other",
+  "10": "other",
+  "13": "cv",
+  "18": "cover_file",
+  "38": "other",
+  "39": "consent",
+  "43": "other"
+ },
+ "Cisco": {
+  "0": "other",
+  "3": "other",
+  "5": "city",
+  "7": "other",
+  "8": "other",
+  "10": "other",
+  "11": "other",
+  "12": "other",
+  "13": "other",
+  "14": "other",
+  "15": "other",
+  "16": "other",
+  "17": "next"
+ },
+ "HPE": {
+  "0": "other",
+  "3": "other",
+  "4": "city",
+  "8": "other",
+  "9": "other",
+  "14": "other",
+  "15": "other",
+  "17": "next"
+ },
+ "Mastercard": {
+  "0": "other",
+  "3": "city",
+  "7": "other",
+  "8": "other",
+  "10": "other",
+  "11": "other",
+  "14": "other",
+  "15": "next"
+ },
+ "Anthropic": {
+  "3": "other",
+  "13": "other",
+  "14": "other",
+  "18": "availability",
+  "28": "other",
+  "30": "other"
+ },
+ "Figma": {
+  "3": "other",
+  "5": "other",
+  "10": "other",
+  "17": "other",
+  "18": "other",
+  "21": "other",
+  "23": "other",
+  "35": "other"
+ },
+ "Hugging_Face": {
+  "6": "other",
+  "10": "other",
+  "11": "other"
+ },
+ "Kering": {
+  "5": "other",
+  "8": "other",
+  "22": "other",
+  "23": "other"
+ },
+ "Spotify": {
+  "3": "other",
+  "4": "other",
+  "13": "other",
+  "14": "full_name",
+  "17": "other",
+  "18": "city",
+  "19": "other",
+  "21": "other",
+  "22": "other",
+  "23": "other"
+ }
+}
