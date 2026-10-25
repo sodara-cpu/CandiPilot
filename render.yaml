@@ -27,6 +27,11 @@ services:
         sync: false
       - key: CANDIPILOT_LLM_DAILY_OFFERS
         value: "400"
+      # Offres de France Travail (API officielle « Offres d'emploi v2 », francetravail.io).
+      - key: FRANCE_TRAVAIL_CLIENT_ID
+        sync: false
+      - key: FRANCE_TRAVAIL_CLIENT_SECRET
+        sync: false
       # E-mails « mot de passe oublié » : clé API Brevo (recommandé), sinon SMTP.
       - key: CANDIPILOT_BREVO_API_KEY
         sync: false

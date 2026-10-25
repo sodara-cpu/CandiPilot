@@ -281,6 +281,34 @@ def careers_private(city: str, slug: str):
     raise HTTPException(500, "Page interdite aux robots : ne doit jamais être lue")
 
 
+# ---------- Faux France Travail (API Offres d'emploi v2) ----------
+FT_OFFERS = [
+    {"id": "FT1", "intitule": "Alternance - Assistant contrôle de gestion (H/F)", "alternance": True, "typeContrat": "CDD",
+     "lieuTravail": {"libelle": "75 - Paris 9e Arrondissement"}, "entreprise": {"nom": "Banque Exemple"},
+     "origineOffre": {"urlOrigine": "https://candidat.francetravail.fr/offres/recherche/detail/FT1"}, "description": "Contrôle de gestion, reporting."},
+    {"id": "FT2", "intitule": "Comptable finance (H/F)", "typeContrat": "CDI", "lieuTravail": {"libelle": "69 - Lyon 3e"},
+     "entreprise": {}, "description": "Comptabilité."},
+]
+
+
+@router.post("/fake-ft/token")
+async def ft_token(request: Request):
+    form = await request.form()
+    if form.get("client_secret") != "secret-test" or "api_offresdemploiv2" not in form.get("scope", ""):
+        return JSONResponse({"error": "invalid_client"}, status_code=400)
+    return {"access_token": "tok-test", "expires_in": 1499, "scope": form.get("scope")}
+
+
+@router.get("/fake-ft/search")
+def ft_search(request: Request, motsCles: str = ""):
+    if request.headers.get("authorization") != "Bearer tok-test":
+        return JSONResponse({"message": "unauthorized"}, status_code=401)
+    if any(c in motsCles for c in "&@"):
+        return JSONResponse({"message": "motsCles invalide"}, status_code=400)
+    words = motsCles.lower().split()
+    return {"resultats": [o for o in FT_OFFERS if any(w[:6] in o["intitule"].lower() for w in words)]}
+
+
 @router.get("/fake-form/etapes")
 def fake_form_steps():
     """Formulaire en deux étapes ; l'étape 1 contient un composant (shadow DOM). L'étape 2 n'existe qu'après « Suivant »."""

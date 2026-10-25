@@ -507,7 +507,8 @@ def launch_search(user=CurrentUser):
         if not db.jload(p["metiers"], []):
             raise HTTPException(422, "Ajoute au moins un métier ciblé dans tes critères.")
         migrations.ensure_default_sources(c, user["id"])      # recherche multi-sites dès la première fois
-        has_sources = c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (user["id"],)).fetchone()
+        from . import francetravail
+        has_sources = francetravail.enabled() or c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (user["id"],)).fetchone()
         jobteaser_ok = worker.FAKE or p["jobteaser_status"] == "connected"
         if not has_sources and not jobteaser_ok:
             raise HTTPException(422, "Connecte d'abord ton compte JobTeaser, ou ajoute une entreprise dans « Mes sources d'offres ».")

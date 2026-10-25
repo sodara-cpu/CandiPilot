@@ -386,9 +386,14 @@ def run_discover(job: dict) -> None:
     wanted = [x.lower() for x in prefs.get("contrats") or []]
     zones = [z.lower() for z in prefs.get("zones") or []]
     total_new = 0
+    from . import francetravail
+    if francetravail.enabled():         # offres de France Travail (API officielle), cherchées par métier
+        sources.append({"id": None, "platform": "francetravail", "token": "", "company": ""})
 
     def read(src):
         try:
+            if src["platform"] == "francetravail":
+                return francetravail.search(prefs), None
             return discovery.fetch(src["platform"], src["token"], src["company"]), None
         except Exception as e:
             return None, e
@@ -398,7 +403,8 @@ def run_discover(job: dict) -> None:
     for src, (jobs, e) in zip(sources, results):
         if e is not None:
             with db.tx() as c:
-                c.execute("UPDATE job_sources SET last_run_at=?, last_status=? WHERE id=?", (db.now(), f"erreur : {e}"[:200], src["id"]))
+                if src["id"]:
+                    c.execute("UPDATE job_sources SET last_run_at=?, last_status=? WHERE id=?", (db.now(), f"erreur : {e}"[:200], src["id"]))
             log_event("discover_error", user=uid, source=f"{src['platform']}:{src['token']}", error=str(e)[:200])
             continue
         new = kept = 0
@@ -430,11 +436,12 @@ def run_discover(job: dict) -> None:
                 c.execute("""INSERT INTO applications(id,user_id,offer_id,statut,mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?)""",
                           (db.new_id(), uid, oid, "qualifiee" if score >= min_score else "decouverte", "manual", db.now(), db.now()))
                 new += 1
-            # Offres de cette source qui ne sont plus publiées : expirées.
-            c.execute("""UPDATE offers SET expired_at=? WHERE user_id=? AND source_ref LIKE ? AND expired_at=''
-                         AND last_seen_at<>'' AND last_seen_at<?""", (db.now(), uid, f"{src['platform']}:{src['token']}:%", started))
-            c.execute("UPDATE job_sources SET last_run_at=?, last_status=?, last_count=? WHERE id=?",
-                      (db.now(), f"ok : {len(jobs)} offres publiées, {kept} pour toi", kept, src["id"]))
+            if src["id"]:      # (France Travail : résultats d'une recherche, pas la liste complète d'une entreprise)
+                # Offres de cette source qui ne sont plus publiées : expirées.
+                c.execute("""UPDATE offers SET expired_at=? WHERE user_id=? AND source_ref LIKE ? AND expired_at=''
+                             AND last_seen_at<>'' AND last_seen_at<?""", (db.now(), uid, f"{src['platform']}:{src['token']}:%", started))
+                c.execute("UPDATE job_sources SET last_run_at=?, last_status=?, last_count=? WHERE id=?",
+                          (db.now(), f"ok : {len(jobs)} offres publiées, {kept} pour toi", kept, src["id"]))
         total_new += new
         log_event("discover_source", user=uid, source=f"{src['platform']}:{src['token']}", published=len(jobs), kept=kept, new=new)
     with db.tx() as c:
@@ -559,7 +566,9 @@ def _scheduler_loop() -> None:
                 if not (due and db.jload(p["metiers"], [])):
                     continue
                 migrations.ensure_default_sources(c, p["user_id"])
-                has_sources = c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (p["user_id"],)).fetchone()
+                from . import francetravail
+                has_sources = francetravail.enabled() or \
+                    c.execute("SELECT 1 FROM job_sources WHERE user_id=? AND enabled=1", (p["user_id"],)).fetchone()
                 if has_sources:
                     enqueue(c, p["user_id"], "discover")         # plateformes de recrutement (serveur)
                 if ready:
