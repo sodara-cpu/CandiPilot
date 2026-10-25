@@ -192,7 +192,9 @@ def fake_apply_greenhouse(real: int = 0):
         """ + ("""<div class="question"><label for="q_city">Dans quelle ville habitez-vous ?</label><input id="q_city" type="text"></div>
         <div class="question"><label for="q_degree">Niveau d'études</label><select id="q_degree"><option value="">Choisir</option>
           <option value="b3">Bac+3</option><option value="b5">Master (Bac+5)</option></select></div>
-        <div class="question"><label for="q_salary">Prétentions salariales</label><input id="q_salary" type="text"></div>""" if real else "") + _SUBMIT)
+        <div class="question"><label for="q_salary">Prétentions salariales</label><input id="q_salary" type="text"></div>
+        <div class="question"><label for="q_hp">Enter website. This input is for robots only, do not enter if you're human.</label>
+          <input id="q_hp" data-automation-id="beecatcher" type="text"></div>""" if real else "") + _SUBMIT)
 
 
 @router.get("/fake-ats/offer/greenhouse")

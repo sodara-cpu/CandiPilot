@@ -250,6 +250,7 @@ try:
               "agent IA : questions maison comprises (ville, niveau d'études choisi dans la liste)")
         check(in_tab("document.querySelector('#q_salary').value") == "" and not in_tab("document.querySelector('#gdpr').checked"),
               "agent IA : salaire et consentement laissés au candidat")
+        check(in_tab("document.querySelector('#q_hp').value") == "", "champ piège pour robots jamais rempli (ni par les règles, ni par l'IA)")
         check(api.get(BASE + f"/api/applications/{site_app}").json()["statut"] == "soumission", "rien n'est envoyé sans le candidat")
         in_tab("(document.querySelector('#question_902').value = 'Oui', document.querySelector('button[type=submit]').click(), 1)")   # le candidat envoie
         a = until(lambda: (lambda x: x if x["statut"] == "confirmee" else None)(api.get(BASE + f"/api/applications/{site_app}").json()), 30)

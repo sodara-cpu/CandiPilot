@@ -311,6 +311,10 @@ function openApplyForm() {
   const visible = (e) => e.offsetParent !== null;
   const fields = [...document.querySelectorAll("input[type=text], input[type=email], input:not([type]), input[type=file], textarea")].filter(visible);
   if (fields.length >= 3) return { form: true };
+  // Choix intermédiaire (Workday : « Postuler manuellement » plutôt que l'import automatique du CV par le site).
+  const manual = document.querySelector("[data-automation-id=applyManually]") ||
+    [...document.querySelectorAll("a, button, [role=button]")].find((e) => visible(e) && /^(postuler manuellement|apply manually)/i.test((e.innerText || "").trim()));
+  if (manual && visible(manual)) { manual.click(); return { clicked: true }; }
   const RE = /^(postuler|je postule|postuler maintenant|candidater|déposer (ma|une) candidature|je suis intéressé|intéressé|apply|apply now|apply for this (job|position)|start application|i'?m interested|candidature)/i;
   const el = [...document.querySelectorAll("a, button, [role=button]")].find((e) => visible(e) && RE.test((e.innerText || e.getAttribute("aria-label") || "").trim()));
   if (!el) return { form: false };
@@ -350,11 +354,13 @@ async function doApply(job) {
   let tab = await chrome.tabs.create({ url: job.url, active: true });
   await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   await waitLoaded(tab.id);
-  const step = await run(tab.id, openApplyForm).catch(() => null);
-  if (step && step.href) { await chrome.tabs.update(tab.id, { url: step.href }); await waitLoaded(tab.id); }
-  else if (step && step.clicked) {
+  // Jusqu'au formulaire : « Postuler », puis un éventuel choix intermédiaire (Workday : « Postuler manuellement »).
+  for (let k = 0; k < 3; k++) {
+    const step = await run(tab.id, openApplyForm).catch(() => null);
+    if (!step || step.form || (!step.href && !step.clicked)) break;
+    if (step.href) { await chrome.tabs.update(tab.id, { url: step.href }); await waitLoaded(tab.id); continue; }
     await sleep(2500);
-    const opened = (await chrome.tabs.query({})).find((t) => t.openerTabId === tab.id);   // « Postuler » ouvert dans un nouvel onglet
+    const opened = (await chrome.tabs.query({})).find((t) => t.openerTabId === tab.id);   // ouvert dans un nouvel onglet
     if (opened) tab = opened;
     await waitLoaded(tab.id);
   }
@@ -364,7 +370,10 @@ async function doApply(job) {
   const res = await fillFrames(tab.id, profile, files, { jobId: job.id });
   doApply.lastEmpty = (await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: countEmptyFields }).catch(() => []))
     .reduce((n, f) => n + (f.result || 0), 0);           // référence : seuls de NOUVEAUX champs relancent le remplissage
-  await beat(`Formulaire rempli (${res.filled.length + res.check.length} champs) : vérifie, complète l'orange et clique « Envoyer ».`);
+  const login = await run(tab.id, () => !![...document.querySelectorAll("input[type=password]")].find((e) => e.offsetParent !== null)).catch(() => false);
+  await beat(login
+    ? `${host} demande de créer un compte ou de te connecter : ton e-mail est prérempli, choisis ton mot de passe et valide. CandiPilot remplira ensuite chaque étape du formulaire.`
+    : `Formulaire rempli (${res.filled.length + res.check.length} champs) : vérifie, complète l'orange et clique « Envoyer ».`);
   // Attente de la page de confirmation (20 min), avec signe de vie au serveur. Si de nouveaux champs apparaissent
   // (connexion / création de compte faite par le candidat, étape suivante), ils sont remplis à leur tour.
   let lastUrl = (await chrome.tabs.get(tab.id)).url;

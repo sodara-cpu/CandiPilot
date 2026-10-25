@@ -133,8 +133,11 @@ export function fillForm(profile, files) {
   const nq = (t) => clean(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
   const ANSWERS = Object.entries(profile.answers || {}).map(([q, a]) => [nq(q), a]).filter(([q, a]) => q.length >= 6 && a);
   const answerFor = (label) => { const l = nq(label); const hit = ANSWERS.find(([q]) => l.includes(q) || (l.length >= 6 && q.includes(l))); return hit ? hit[1] : ""; };
+  // Champs pièges pour robots (« for robots only, do not enter ») : jamais touchés, sinon le site nous prend pour un robot.
+  const HONEYPOT = /robots? only|do not (enter|fill)|leave (this )?(field )?(blank|empty)|ne pas remplir|honeypot|beecatcher|hp[_-]?field/i;
+  const trap = (el) => HONEYPOT.test([labelOf(el).strong, el.name, el.id, el.getAttribute("data-automation-id") || "", el.getAttribute("autocomplete") === "off" && el.tabIndex < 0 ? "honeypot" : ""].join(" "));
   const usable = (el) => !["hidden", "submit", "button", "reset", "image", "password", "search"].includes(el.type) && !el.disabled
-    && (el.offsetParent !== null || el.type === "file");      // les plateformes cachent souvent le champ du CV derrière un bouton
+    && (el.offsetParent !== null || el.type === "file") && !trap(el);      // le champ du CV est souvent caché derrière un bouton
 
   window.__candipilotSeen = new WeakSet();     // un nouveau clic sur « Remplir » reprend tous les champs
   const report = { filled: [], check: [], todo: [], total: 0, platform: adapter ? adapter[0] : "", steps: false, watching: false, unknown: [] };
