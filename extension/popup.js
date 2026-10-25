@@ -1,6 +1,7 @@
 const NAMES = { jobteaser: "JobTeaser", linkedin: "LinkedIn", wttj: "Welcome to the Jungle" };
 const LOGIN = { jobteaser: "https://www.jobteaser.com/fr/users/sign_in", linkedin: "https://www.linkedin.com/login",
   wttj: "https://www.welcometothejungle.com/fr/signin" };
+const PLATFORMS = { greenhouse: "Greenhouse", lever: "Lever" };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const send = (msg) => chrome.runtime.sendMessage(msg);
@@ -33,6 +34,10 @@ $("fill").onclick = async () => {
   const r = await send({ type: "fill", tabId: tab.id });
   $("fill").disabled = false;
   $("fillResult").innerHTML = r.error ? `<span class="ko">${esc(r.error)}</span>`
-    : `<span class="ok">✓ ${r.filled.length} champ(s) rempli(s)</span>${r.todo.length ? `<div class="muted">À compléter par toi (en orange) : ${esc(r.todo.join(", "))}</div>` : ""}`;
+    : `<span class="ok">✓ ${r.filled.length + r.check.length} champ(s) rempli(s)${r.platform ? ` · formulaire ${esc(PLATFORMS[r.platform] || r.platform)} reconnu` : ""}</span>
+       ${r.check.length ? `<div class="muted">À vérifier (pointillés orange) : ${esc(r.check.join(", "))}</div>` : ""}
+       ${r.todo.length ? `<div class="muted">À compléter par toi (en orange) : ${esc(r.todo.join(", "))}</div>` : ""}
+       ${r.steps ? `<div class="muted">Formulaire en plusieurs étapes : clique toi-même sur « Suivant », les champs suivants se remplissent tout seuls.</div>` : ""}
+       <div class="muted">Rien n'est envoyé : relis, puis envoie toi-même.</div>`;
 };
 draw();

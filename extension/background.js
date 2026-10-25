@@ -226,7 +226,15 @@ function fillTab(tabId) { return exclusive(() => fillTabNow(tabId)); }
 async function fillTabNow(tabId) {
   const profile = await api("/api/agent/profile");
   const files = { cv: await fileB64(profile.cv), letter: await fileB64(profile.letter) };
-  return await run(tabId, fillForm, [profile, files]);
+  // Dans chaque cadre de la page : les formulaires Greenhouse ou Lever sont souvent intégrés dans un cadre (iframe).
+  const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: fillForm, args: [profile, files] });
+  const out = { filled: [], check: [], todo: [], total: 0, platform: "", steps: false, watching: false };
+  for (const { result: r } of frames) {
+    if (!r) continue;
+    for (const k of ["filled", "check", "todo"]) out[k].push(...r[k]);
+    out.total += r.total; out.platform ||= r.platform; out.steps ||= r.steps; out.watching ||= r.watching;
+  }
+  return out;
 }
 self.fillTab = fillTab;          // accessible aux tests
 

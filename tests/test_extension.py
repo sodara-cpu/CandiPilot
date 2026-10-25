@@ -80,7 +80,8 @@ try:
         check(until(lambda: api.get(BASE + "/api/agent/status").json().get("linked"), 30), "extension reliée toute seule au compte")
         check(page.evaluate("document.documentElement.dataset.candipilotExtension") == json.load(open(ROOT / "extension/manifest.json"))["version"], "l'appli voit que l'extension est installée")
 
-        api.put(BASE + "/api/profile", data={"phone": "+33600000000", "availability": "Mars 2027", "gender": "Homme"})
+        api.put(BASE + "/api/profile", data={"phone": "+33600000000", "availability": "Mars 2027", "gender": "Homme",
+                                              "linkedin": "https://www.linkedin.com/in/alex-martin"})
         api.post(BASE + "/api/documents", multipart={"type": "cv", "file": {"name": "Mon_CV.pdf", "mimeType": "application/pdf", "buffer": PDF}})
         api.put(BASE + "/api/workflow", data={"letter_source": "template"})
         api.put(BASE + "/api/preferences", data={"metiers": ["analyste"], "zones": [], "contrats": ["stage"], "start_from": "2027-03-01", "min_score": 0})
@@ -148,6 +149,42 @@ try:
         check(any("Comment avez-vous connu" in t for t in res["todo"]) and any("cocher" in t for t in res["todo"]),
               "questions inconnues et cases à cocher laissées au candidat (surlignées)")
         check(not form.evaluate("window.submitted === true"), "le formulaire n'est jamais envoyé par l'extension")
+
+        def fill_page(path):
+            pg = ctx.new_page()
+            pg.goto(BASE + path)
+            tid = sw.evaluate(f"chrome.tabs.query({{url: '*://127.0.0.1{path}*'}}).then(t => t[0].id)")
+            return pg, sw.evaluate(f"fillTab({tid})")
+
+        # 5b. Lot 4 : formulaires Greenhouse et Lever reconnus, composants, étapes, cadres.
+        gh, res = fill_page("/fake-ats/apply/greenhouse")
+        v = lambda sel: gh.eval_on_selector(sel, "e => e.value")
+        check(res["platform"] == "greenhouse" and v("#first_name") == "Alex" and v("#last_name") == "Martin" and v("#phone") == "+33600000000",
+              "Greenhouse reconnu : identité et téléphone remplis")
+        check(gh.eval_on_selector("#resume", "e => e.files.length && e.files[0].name") == "Mon_CV.pdf", "Greenhouse : CV déposé dans le champ caché")
+        check(v("#question_901") == "https://www.linkedin.com/in/alex-martin", "Greenhouse : question LinkedIn reconnue")
+        check(any("legally authorized" in t for t in res["todo"]) and v("#question_902") == "" and not gh.eval_on_selector("#gdpr", "e => e.checked"),
+              "Greenhouse : question d'autorisation de travail et consentement laissés au candidat")
+        check(not gh.evaluate("window.submitted === true"), "Greenhouse : rien n'est envoyé")
+
+        lv, res = fill_page("/fake-ats/apply/lever")
+        v = lambda sel: lv.eval_on_selector(sel, "e => e.value")
+        check(res["platform"] == "lever" and v("input[name=name]") == "Alex Martin" and v("input[name='urls[LinkedIn]']").endswith("alex-martin"),
+              "Lever reconnu : nom complet et lien LinkedIn remplis")
+        check(lv.eval_on_selector("input[name=resume]", "e => e.files.length") == 1 and v("input[name=org]") == "", "Lever : CV déposé, entreprise actuelle laissée vide")
+
+        st, res = fill_page("/fake-form/etapes")
+        check(st.evaluate("document.getElementById('comp').shadowRoot.getElementById('mail').value").endswith("@example.com"),
+              "champ dans un composant (shadow DOM) rempli")
+        check(res["steps"] and res["watching"], "formulaire en plusieurs étapes détecté")
+        st.click("#next")                    # le candidat passe lui-même à l'étape suivante
+        check(until(lambda: st.eval_on_selector("#tel", "e => e.value") == "+33600000000", 10), "étape 2 remplie automatiquement après « Suivant »")
+        check(st.eval_on_selector("#cv2", "e => e.files.length") == 1 and not st.evaluate("window.submitted === true"),
+              "étape 2 : CV déposé, et rien n'est envoyé")
+
+        fr, res = fill_page("/fake-form/cadre")
+        check(res["platform"] == "greenhouse" and fr.frame_locator("#gh").locator("#first_name").input_value() == "Alex",
+              "formulaire intégré dans un cadre (iframe) rempli")
 
         # 6. Sécurité du jeton.
         bad = urllib.request.Request(BASE + "/api/agent/next", headers={"Authorization": "Bearer faux"})

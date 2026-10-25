@@ -160,6 +160,71 @@ def fake_form():
       </form>""")
 
 
+_SUBMIT = """<button type="submit">Submit application</button></form>"""
+
+
+@router.get("/fake-ats/apply/greenhouse")
+def fake_apply_greenhouse():
+    """Formulaire au balisage de Greenhouse (job-boards) : champ du CV caché derrière un bouton, questions maison."""
+    return _page("Apply — Acme (Greenhouse)", """
+      <form id="application-form" class="application--form" onsubmit="window.submitted = true; return false;">
+        <label for="first_name">First Name*</label><input id="first_name" type="text"><br>
+        <label for="last_name">Last Name*</label><input id="last_name" type="text"><br>
+        <label for="email">Email*</label><input id="email" type="text"><br>
+        <label for="phone">Phone</label><input id="phone" type="text"><br>
+        <div class="file-upload"><label id="upload-label-resume" for="resume">Resume/CV*</label>
+          <button type="button">Attach</button><input id="resume" type="file" style="display:none"></div>
+        <label for="question_901">LinkedIn Profile</label><input id="question_901" type="text"><br>
+        <label for="question_902">Are you legally authorized to work in France?*</label><input id="question_902" type="text"><br>
+        <label><input type="checkbox" id="gdpr"> I consent to the processing of my data</label><br>
+        """ + _SUBMIT)
+
+
+@router.get("/fake-ats/apply/lever")
+def fake_apply_lever():
+    """Formulaire au balisage de Lever : nom complet en un seul champ, liens nommés urls[...]."""
+    return _page("Acme — Finance Intern (Lever)", """
+      <form id="application-form" onsubmit="window.submitted = true; return false;">
+        <div class="application-question"><div class="application-label">Resume/CV</div><input type="file" name="resume"></div>
+        <div class="application-question"><div class="application-label">Full name</div><input type="text" name="name"></div>
+        <div class="application-question"><div class="application-label">Email</div><input type="email" name="email"></div>
+        <div class="application-question"><div class="application-label">Phone</div><input type="text" name="phone"></div>
+        <div class="application-question"><div class="application-label">Current company</div><input type="text" name="org"></div>
+        <div class="application-question"><div class="application-label">LinkedIn URL</div><input type="text" name="urls[LinkedIn]"></div>
+        """ + _SUBMIT)
+
+
+@router.get("/fake-form/etapes")
+def fake_form_steps():
+    """Formulaire en deux étapes ; l'étape 1 contient un composant (shadow DOM). L'étape 2 n'existe qu'après « Suivant »."""
+    return _page("Candidature en étapes", """
+      <form id="f" onsubmit="window.submitted = true; return false;">
+        <div id="step"><h2>Étape 1 sur 2</h2>
+          <label for="fn">Prénom</label><input id="fn"><br>
+          <cp-field id="comp"></cp-field></div>
+        <button type="button" id="next">Suivant</button>
+      </form>
+      <script>
+        customElements.define("cp-field", class extends HTMLElement {
+          constructor() { super(); this.attachShadow({mode: "open"}).innerHTML =
+            '<label for="mail">Adresse e-mail</label><input id="mail" name="mail">'; }
+        });
+        document.getElementById("next").onclick = () => {
+          document.getElementById("step").innerHTML = '<h2>Étape 2 sur 2</h2>' +
+            '<label for="tel">Téléphone</label><input id="tel"><br>' +
+            '<label for="cv2">Ton CV</label><input type="file" id="cv2"><br>' +
+            '<button type="submit">Envoyer</button>';
+        };
+      </script>""")
+
+
+@router.get("/fake-form/cadre")
+def fake_form_frame():
+    """Page carrières qui intègre le formulaire Greenhouse dans un cadre (iframe), comme beaucoup d'entreprises."""
+    return _page("Carrières — Acme", """<h1>Rejoins Acme</h1>
+      <iframe id="gh" src="/fake-ats/apply/greenhouse" style="width:700px;height:600px"></iframe>""")
+
+
 # ---------- Fausses API de plateformes de recrutement (découverte multi-sources, lot 2) ----------
 ATS_JOBS = {   # mêmes offres vues par plusieurs plateformes pour tester les doublons
     "gh1": {"title": "Finance Intern (H/F)", "location": "Paris, France", "contract": ""},
