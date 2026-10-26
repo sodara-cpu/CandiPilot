@@ -129,6 +129,16 @@ def rate(offers: list, ctx: dict) -> tuple:
     return json.loads(text)["offers"], usage
 
 
+# Prix Claude Opus 5.5 (par million de jetons) : entrée 4 $, sortie 20 $, lecture du cache 0,20 $.
+PRICE = {"input": 4.0, "output": 20.0, "cache_read": 0.20}
+
+
+def cost(usage: dict) -> float:
+    """Coût estimé d'un appel en dollars (suivi par appel dans les journaux)."""
+    return round((usage.get("input_tokens", 0) * PRICE["input"] + usage.get("output_tokens", 0) * PRICE["output"]
+                  + usage.get("cache_read_input_tokens", 0) * PRICE["cache_read"]) / 1e6, 5)
+
+
 def budget_left(conn, user_id: str) -> int:
     r = conn.execute("SELECT offers FROM llm_usage WHERE user_id=? AND day=?", (user_id, db.now()[:10])).fetchone()
     return max(0, DAILY_OFFERS - (r["offers"] if r else 0))
@@ -368,6 +378,8 @@ def _observation_text(obs: dict) -> str:
         if e.get("required"): bits.append("obligatoire")
         if e.get("options"): bits.append("options=" + " | ".join(str(o)[:50] for o in e["options"][:15]))
         lines.append(" ".join(bits))
+    if obs.get("errors"):
+        lines.append("Erreurs de validation affichées par le site (à corriger) : " + " | ".join(str(x)[:150] for x in obs["errors"][:15]))
     lines.append("Texte visible (extrait) :\n" + str(obs.get("text", ""))[:2500])
     return "\n".join(lines)
 
@@ -381,6 +393,16 @@ def _fake_agent(obs: dict, history: list, allow_submit: bool = False) -> list:
     for e in els:
         if e.get("tag") == "select" and not e.get("value") and any("master" in str(o).lower() for o in e.get("options") or []):
             return [{"name": "choose", "input": {"id": e["id"], "option": next(o for o in e["options"] if "master" in str(o).lower())}}]
+    groups = {}
+    for e in els:
+        if e.get("type") == "radio":
+            groups.setdefault(lab(e).split("→")[0].strip(), []).append(e)
+    for g in groups.values():
+        if any(x.get("required") for x in g) and not any(x.get("checked") for x in g):
+            return [{"name": "click", "input": {"id": g[0]["id"]}}]
+    for e in els:
+        if e.get("tag") == "textarea" and e.get("required") and not e.get("value"):
+            return [{"name": "type_text", "input": {"id": e["id"], "text": "(simulation) Ce stage correspond à mon projet en finance."}}]
     for e in els:
         if e.get("tag") in ("a", "button") and re.search(r"aventure|suivant|next|continuer", lab(e)):
             return [{"name": "click", "input": {"id": e["id"]}}]

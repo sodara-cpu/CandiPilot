@@ -24,7 +24,9 @@ export function observePage() {
     if (["input", "textarea", "select"].includes(tag)) {
       if (e.type === "file") item.value = e.files && e.files[0] ? e.files[0].name : "";
       else if (e.type === "password") item.value = e.value ? "•••" : "";
-      else if (!["checkbox", "radio"].includes(e.type)) item.value = clean(tag === "select" ? (e.selectedOptions[0] || {}).text : e.value).slice(0, 80);
+      // Liste déroulante sur son option d'attente (« Choisir… », valeur vide) : pas encore choisie.
+      else if (tag === "select") item.value = e.value ? clean((e.selectedOptions[0] || {}).text).slice(0, 80) : "";
+      else if (!["checkbox", "radio"].includes(e.type)) item.value = clean(e.value).slice(0, 80);
       if (["checkbox", "radio"].includes(e.type)) item.checked = e.checked;
       if (e.required || e.getAttribute("aria-required") === "true") item.required = true;
       if (tag === "select") item.options = [...e.options].map((o) => clean(o.text)).filter(Boolean).slice(0, 25);
@@ -34,7 +36,17 @@ export function observePage() {
   const deep = (root) => { walk(root); root.querySelectorAll("*").forEach((x) => { if (x.shadowRoot) deep(x.shadowRoot); }); };
   deep(document);
   window.__cpEls = els;
-  return { url: location.href, title: document.title, elements: list.slice(0, 150), text: clean(document.body ? document.body.innerText : "").slice(0, 2500) };
+  // Messages d'erreur de validation affichés par le site (champ obligatoire, format…) : renvoyés à l'agent.
+  const errors = [];
+  const errWalk = (root) => root.querySelectorAll("[aria-invalid=true], [role=alert], [class*=error], [class*=Error], [class*=invalid], .field-error, .help-block").forEach((x) => {
+    if (x.offsetParent === null) return;
+    const t = clean(x.matches("input, select, textarea") ? `champ invalide : ${labelOf(x)}` : x.innerText);
+    if (t && t.length < 200 && !errors.includes(t)) errors.push(t);
+  });
+  const deepErr = (root) => { errWalk(root); root.querySelectorAll("*").forEach((x) => { if (x.shadowRoot) deepErr(x.shadowRoot); }); };
+  deepErr(document);
+  return { url: location.href, title: document.title, elements: list.slice(0, 150), errors: errors.slice(0, 15),
+           text: clean(document.body ? document.body.innerText : "").slice(0, 2500) };
 }
 
 export function runAction(action, files, allowSubmit = false) {
@@ -70,7 +82,7 @@ export function runAction(action, files, allowSubmit = false) {
       if (e.type === "password") return "refusé : mot de passe réservé au candidat";
       if (!["INPUT", "TEXTAREA"].includes(e.tagName)) return "pas un champ de saisie";
       e.focus(); set(e, action.input.text); mark(e);
-      return "ok";
+      return e.value === action.input.text ? "ok (vérifié)" : `échec : le site a modifié la valeur (« ${clean(e.value).slice(0, 40)} »)`;
     }
     case "choose": {
       if (e.tagName !== "SELECT") return "pas une liste déroulante";
@@ -78,7 +90,7 @@ export function runAction(action, files, allowSubmit = false) {
       const o = [...e.options].find((x) => clean(x.text).toLowerCase() === want) || [...e.options].find((x) => clean(x.text).toLowerCase().includes(want));
       if (!o) return "option introuvable";
       set(e, o.value); mark(e);
-      return "ok";
+      return e.value === o.value ? "ok (vérifié)" : "échec : option non retenue par le site";
     }
     case "upload": {
       const f = files && files[action.input.document];
@@ -88,7 +100,7 @@ export function runAction(action, files, allowSubmit = false) {
       const dt = new DataTransfer(); dt.items.add(new File([bytes], f.name, { type: "application/pdf" }));
       e.files = dt.files;
       for (const t of ["input", "change"]) e.dispatchEvent(new Event(t, { bubbles: true, composed: true }));
-      return "ok";
+      return e.files.length === 1 && e.files[0].name === f.name ? `ok (vérifié : ${f.name} attaché)` : "échec : fichier non attaché";
     }
     default:
       return "ok";

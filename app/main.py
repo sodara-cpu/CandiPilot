@@ -988,12 +988,27 @@ def apply_on_site(app_id: str, user=CurrentUser):
             raise HTTPException(422, "Offre JobTeaser : utilise « Valider et démarrer le robot » dans le récapitulatif.")
         if a["statut"] not in ("a_valider", "echec", "incertaine", "attente_utilisateur"):
             raise HTTPException(409, "Prépare d'abord ce dossier (CV et lettre), puis postule.")
-        worker._set_app(c, app_id, statut="soumission", selected=1, launched=1, idempotency_key=db.new_id(),
+        worker._set_app(c, app_id, statut="soumission", selected=1, launched=1, idempotency_key=db.new_id(), phase="OPENING",
                         detail="L'extension ouvre l'offre et remplit le formulaire : vérifie puis clique « Envoyer ».")
         jid = worker.enqueue(c, user["id"], "apply", app_id)
         db.add_event(c, user["id"], "info", f"Candidature en cours sur le site de {a['entreprise']}.", app_id)
     worker.log_event("apply_started", user=user["id"], application=app_id)
     return {"job_id": jid}
+
+
+@app.post("/api/applications/{app_id}/stop")
+def stop_application(app_id: str, user=CurrentUser):
+    """Arrêt immédiat d'une candidature en cours : l'extension et l'agent s'arrêtent à leur prochaine action."""
+    with db.tx() as c:
+        a = _app_or_404(c, app_id, user["id"])
+        if a["statut"] != "soumission":
+            raise HTTPException(409, "Aucune candidature en cours à arrêter.")
+        c.execute("""UPDATE jobs SET statut='erreur', progress='Arrêtée par toi', updated_at=? WHERE application_id=?
+                     AND type IN ('apply','submit') AND statut IN ('en_attente','en_cours')""", (db.now(), app_id))
+        worker._set_app(c, app_id, statut="attente_utilisateur", phase="HUMAN_ACTION_REQUIRED",
+                        detail="Arrêtée par toi. Clique « Reprendre l'envoi » pour relancer (sans double envoi).")
+    worker.log_event("apply_stopped", user=user["id"], application=app_id)
+    return get_application(app_id, user)
 
 
 @app.post("/api/applications/{app_id}/resume", status_code=202)

@@ -344,6 +344,98 @@ def adzuna_search(page: int, app_id: str = "", app_key: str = "", what: str = ""
     return {"results": [o for o in offers if any(x[:6] in o["title"].lower() for x in w.split())]}
 
 
+# ---------- Site carrières de test complet (moteur de candidature, tests de bout en bout) ----------
+# Offre → « Postuler » → formulaire en 3 étapes (identité + CV ; questions : liste, cases, choix, champ conditionnel ;
+# récapitulatif + consentement) avec validation → envoi réel (fichier reçu) → page de confirmation avec référence.
+SITE_SUBMISSIONS: list = []
+
+
+@router.get("/fake-site/offre/{ref}")
+def site_offer(ref: str):
+    return _page("Analyste Financier Junior — Groupe Exemple", f"""<header><nav><a href="#">Accueil</a> <a href="#">Nos métiers</a></nav></header>
+      <h1>Analyste Financier Junior (H/F) — Stage 6 mois</h1><p>Paris La Défense · Stage · Référence {ref}</p>
+      <p>Au sein de la direction financière, tu participes au reporting et à la modélisation.</p>
+      <a class="cta" href="/fake-site/candidature/{ref}">Je postule à cette offre</a>""")
+
+
+@router.get("/fake-site/candidature/{ref}")
+def site_form(ref: str):
+    return _page("Candidature — Groupe Exemple", """
+<style>.step{display:none}.step.on{display:block}.err{color:#b00;font-size:13px}label{display:block;margin-top:10px}</style>
+<h1>Ta candidature</h1><p id="where">Étape 1 sur 3</p>
+<form id="app" novalidate>
+ <section class="step on" data-s="1">
+  <label for="prenom">Prénom *</label><input id="prenom" name="prenom" required>
+  <label for="nom">Nom *</label><input id="nom" name="nom" required>
+  <label for="courriel">Adresse e-mail *</label><input id="courriel" name="courriel" type="email" required>
+  <label for="tel">Téléphone mobile *</label><input id="tel" name="tel" type="tel" required>
+  <label for="cv">Ton CV (PDF) *</label><input id="cv" name="cv" type="file" accept=".pdf" required>
+  <label for="lm">Lettre de motivation (facultatif)</label><input id="lm" name="lm" type="file" accept=".pdf">
+  <button type="button" class="next">Continuer</button>
+ </section>
+ <section class="step" data-s="2">
+  <label for="niveau">Niveau d'études *</label><select id="niveau" name="niveau" required><option value="">Choisir…</option>
+   <option>Bac+3</option><option>Master 1</option><option>Master 2 / Bac+5</option></select>
+  <fieldset><legend>Disponibilité *</legend>
+   <label><input type="radio" name="dispo" value="immediate" required> Immédiate</label>
+   <label><input type="radio" name="dispo" value="date" required> À une date précise</label></fieldset>
+  <div id="dispo-date" hidden><label for="date_debut">Date de début souhaitée *</label><input id="date_debut" name="date_debut" placeholder="JJ/MM/AAAA"></div>
+  <label for="langues">Langues parlées</label><input id="langues" name="langues">
+  <label for="motivation">Pourquoi ce stage ? *</label><textarea id="motivation" name="motivation" required></textarea>
+  <label for="salaire">Gratification souhaitée</label><input id="salaire" name="salaire">
+  <button type="button" class="prev">Retour</button><button type="button" class="next">Continuer</button>
+ </section>
+ <section class="step" data-s="3">
+  <p>Vérifie tes informations avant l'envoi.</p>
+  <label><input type="checkbox" id="rgpd" name="rgpd" required> J'accepte la politique de confidentialité du Groupe Exemple *</label>
+  <label for="site_web">Enter website. This input is for robots only, do not enter if you're human.</label><input id="site_web" name="site_web">
+  <button type="button" class="prev">Retour</button><button type="submit" id="send">Envoyer ma candidature</button>
+ </section>
+</form>
+<script>
+const f = document.getElementById("app"); let s = 1;
+const show = () => { document.querySelectorAll(".step").forEach(x => x.classList.toggle("on", +x.dataset.s === s)); document.getElementById("where").textContent = `Étape ${s} sur 3`; };
+document.querySelectorAll("input[name=dispo]").forEach(r => r.onchange = () => {
+  const on = f.dispo.value === "date"; document.getElementById("dispo-date").hidden = !on; document.getElementById("date_debut").required = on; });
+const check = () => {
+  let ok = true; const sec = document.querySelector(".step.on");
+  sec.querySelectorAll(".err").forEach(e => e.remove()); sec.querySelectorAll("[aria-invalid]").forEach(e => e.removeAttribute("aria-invalid"));
+  sec.querySelectorAll("input, select, textarea").forEach(e => {
+    if (!e.required || e.closest("[hidden]")) return;
+    const empty = e.type === "file" ? !e.files.length : e.type === "checkbox" ? !e.checked : e.type === "radio" ? !f[e.name].value : !e.value.trim();
+    const bad = e.type === "email" && e.value && !/^\S+@\S+\.\S+$/.test(e.value);
+    if (empty || bad) { ok = false; e.setAttribute("aria-invalid", "true");
+      if (!(e.type === "radio" && e.parentElement.nextElementSibling?.classList?.contains("err"))) e.insertAdjacentHTML("afterend", `<div class="err" role="alert">${bad ? "Adresse e-mail invalide" : "Ce champ est obligatoire"}</div>`); }
+  });
+  return ok;
+};
+document.querySelectorAll(".next").forEach(b => b.onclick = () => { if (check()) { s++; show(); } });
+document.querySelectorAll(".prev").forEach(b => b.onclick = () => { s--; show(); });
+f.onsubmit = async (ev) => { ev.preventDefault(); if (!check()) return;
+  const r = await fetch(location.pathname.replace("/candidature/", "/_envoi/"), { method: "POST", body: new FormData(f) });
+  const d = await r.json();
+  document.body.innerHTML = r.ok ? `<h1>Merci, ta candidature a bien été envoyée !</h1><p>Référence : ${d.reference}</p>` : `<h1>Erreur</h1><p>${d.detail}</p>`; };
+</script>""")
+
+
+@router.post("/fake-site/_envoi/{ref}")
+async def site_submit(ref: str, request: Request):
+    form = await request.form()
+    if form.get("site_web"):
+        return JSONResponse({"detail": "Candidature rejetée : champ réservé aux robots rempli."}, status_code=400)
+    cv = form.get("cv")
+    data = {k: (v if isinstance(v, str) else None) for k, v in form.items()}
+    data.update(offre=ref, cv_name=getattr(cv, "filename", ""), cv_size=len(await cv.read()) if cv and hasattr(cv, "read") else 0,
+                reference=f"GE-{ref}-{len(SITE_SUBMISSIONS) + 1:04d}")
+    SITE_SUBMISSIONS.append(data)
+    return {"reference": data["reference"]}
+
+
+@router.get("/fake-site/_candidatures")
+def site_submissions():
+    return JSONResponse(SITE_SUBMISSIONS)
+
+
 @router.get("/fake-form/etapes")
 def fake_form_steps():
     """Formulaire en deux étapes ; l'étape 1 contient un composant (shadow DOM). L'étape 2 n'existe qu'après « Suivant »."""

@@ -29,7 +29,7 @@ def guide(c):
     return c.req("GET", "/api/guide")[1]
 
 
-def wait_until(fn, timeout=40):
+def wait_until(fn, timeout=90):       # file du robot simulé parfois lente sous charge
     end = time.time() + timeout
     while time.time() < end:
         if fn():

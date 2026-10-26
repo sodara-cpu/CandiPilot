@@ -77,6 +77,10 @@ const STATUS = {
   echec: ["Échec", "b-red"], incertaine: ["Incertaine", "b-amber"], ignoree: ["Ignorée", "b-mute"],
   attente_utilisateur: ["À toi de jouer", "b-amber"],
 };
+// Étape détaillée d'une candidature sur le site d'une entreprise (moteur de candidature).
+const PHASES = { OPENING: "Ouverture de l'offre", AUTHENTICATION_REQUIRED: "Connexion ou compte requis", FILLING: "Remplissage du formulaire",
+  VALIDATING: "Vérification", READY_TO_SUBMIT: "Prête : à toi d'envoyer", SUBMITTING: "Envoi en cours", SUBMITTED: "Envoyée (confirmée)",
+  HUMAN_ACTION_REQUIRED: "Action de ta part", UNSUPPORTED: "Site non compatible", FAILED: "Échec" };
 const statusBadge = (s) => `<span class="badge ${STATUS[s]?.[1] || "b-mute"}">${esc(STATUS[s]?.[0] || s)}</span>`;
 const MODES = { auto: "Automatique", assisted: "Assisté", manual: "Semi-assisté" };
 
@@ -388,7 +392,7 @@ async function applicationView(id) {
 
   let banner = "";
   if (a.statut === "confirmee") banner = `<section class="card pad pop" style="background:var(--green-bg);border-color:var(--line-2)"><b style="color:var(--green)">Candidature envoyée</b><div style="font-size:14px;color:var(--green)">Preuve : ${esc(a.preuve)} · ${a.date_envoi ? new Date(a.date_envoi).toLocaleString("fr-FR") : ""}</div></section>`;
-  else if (a.statut === "soumission" && a.apply_type !== "jobteaser") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Candidature en cours sur le site de l'entreprise</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "L'extension ouvre l'offre dans un nouvel onglet de Chrome et remplit le formulaire.")} Vérifie, complète ce qui est en orange et clique « Envoyer » : CandiPilot repère la page de confirmation et la marque « Envoyée ».</div></section>`;
+  else if (a.statut === "soumission" && a.apply_type !== "jobteaser") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Candidature en cours sur le site de l'entreprise${a.phase ? " · " + esc(PHASES[a.phase] || a.phase) : ""}</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "L'extension ouvre l'offre dans un nouvel onglet de Chrome et remplit le formulaire.")} Vérifie, complète ce qui est en orange et clique « Envoyer » : CandiPilot repère la page de confirmation et la marque « Envoyée ».</div></section>`;
   else if (a.statut === "soumission") banner = `<section class="card pad pop" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Envoi en cours</b><div style="font-size:14px;color:var(--blue)">${a.mode === "assisted" ? "Le robot a ouvert le formulaire : vérifie-le et clique « Postuler maintenant » dans sa fenêtre." : "Le robot remplit et envoie le formulaire."} Elle passera en « Envoyée » seulement quand JobTeaser confirmera la réception.</div></section>`;
   else if (a.statut === "preparation") banner = `<section class="card pad" style="background:var(--blue-bg);border-color:var(--line-2)"><b style="color:var(--blue)"><span class="spin"></span> Préparation en cours</b><div style="font-size:14px;color:var(--blue)">${esc(a.job?.progress || "Le robot rédige la lettre et lit le formulaire de candidature.")}</div></section>`;
   else if (a.statut === "echec") banner = `<section class="card pad" style="background:var(--red-bg);border-color:var(--line-2)"><b style="color:var(--red)">Échec</b><div style="font-size:14px;color:var(--red)">${esc(a.detail)}</div></section>`;
@@ -507,6 +511,7 @@ async function applicationView(id) {
   on("doIgnore", () => act(() => api(`/api/applications/${id}/ignore`, { method: "POST" }), "Offre ignorée.").then(() => go("#/envoi")));
   on("doRestore", () => act(() => api(`/api/applications/${id}/restore`, { method: "POST" }), "Offre restaurée.").then(route));
   on("doRetry", () => act(() => api(`/api/applications/${id}/retry`, { method: "POST" }), "Dossier remis dans le récapitulatif d'envoi.").then(route));
+  on("doStop", () => act(() => api(`/api/applications/${id}/stop`, { method: "POST" }), "Candidature arrêtée.").then(route));
   on("doApply", () => act(() => api(`/api/applications/${id}/apply`, { method: "POST" }), "L'extension ouvre l'offre dans un nouvel onglet de Chrome…").then(route));
   on("doResume", () => act(() => api(`/api/applications/${id}/resume`, { method: "POST" }), "Envoi repris : le robot recommence.").then(route));
   on("doVerify", () => act(() => api(`/api/applications/${id}/verify`, { method: "POST" }), "Vérification lancée.").then(route));
@@ -519,6 +524,9 @@ function actionsFor(a, busy) {
   const s = a.statut, f = a.flow;
   const toRecap = `<a class="btn btn-ghost" href="#/envoi">Aller au récapitulatif d'envoi</a>`;
   if (s === "ignoree") return `<button class="btn btn-ghost" id="doRestore">Restaurer l'offre</button>`;
+  if (s === "soumission" && a.apply_type !== "jobteaser")
+    return `<button class="btn btn-ai" disabled><span class="spin"></span> ${esc(PHASES[a.phase] || "Candidature en cours")}…</button>
+      <button class="btn btn-ghost" id="doStop">Arrêter</button>`;
   if (s === "preparation" || busy) return `<button class="btn btn-ai" disabled><span class="spin"></span> Robot au travail…</button>`;
   // Offre sur le site de l'entreprise : l'extension ouvre l'offre et remplit le formulaire, le candidat envoie.
   if (s === "a_valider" && a.apply_type !== "jobteaser") return `

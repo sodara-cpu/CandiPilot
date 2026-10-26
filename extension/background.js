@@ -21,10 +21,18 @@ const conf = () => chrome.storage.local.get(["server", "token", "userId"]);
 async function api(path, { method = "GET", body, raw = false } = {}) {
   const { server, token } = await conf();
   if (!server || !token) throw new Error("Extension non reliée : ouvre CandiPilot.");
-  const r = await fetch(server + path, {
-    method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  // Coupure réseau ou serveur qui redémarre : 3 essais, attente croissante (1 s, 2 s, 4 s).
+  let r;
+  for (let k = 0; ; k++) {
+    try {
+      r = await fetch(server + path, {
+        method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", "X-CandiPilot-Version": VERSION },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (r.status < 502 || k >= 3) break;
+    } catch (e) { if (k >= 3) throw e; }
+    await sleep(1000 * 2 ** k);
+  }
   if (r.status === 401) { await chrome.storage.local.remove("token"); throw new Error("Jeton refusé : ouvre CandiPilot pour relier l'extension."); }
   if (raw) return r;
   if (r.status === 204) return null;
@@ -339,8 +347,12 @@ function countEmptyFields() {
 // Page de confirmation après l'envoi (preuve) : phrase repérée et adresse de la page.
 function detectConfirmation() {
   const RE = /(merci (pour|de) (votre|ta) candidature|nous avons bien reçu (votre|ta) candidature|candidature (a bien été |a été |bien )?(envoyée|reçue|transmise|enregistrée)|thank you for (applying|your application|your interest)|(your )?application (has been |was )?(submitted|received|sent)|we('ve| have) received your application)/i;
-  const m = (document.body.innerText || "").match(RE);
-  return m ? `${m[0]} — ${location.href}` : null;
+  const text = (document.body.innerText || "").replace(/\s+/g, " ").trim();
+  const m = text.match(RE);
+  if (!m) return null;
+  // Preuve : la phrase, le texte autour (numéro de référence le plus souvent) et l'adresse de la page.
+  const around = text.slice(Math.max(0, m.index - 60), m.index + m[0].length + 140);
+  return `${around} — ${location.href}`;
 }
 
 // ---------- agent navigateur : Claude pilote l'onglet ----------
@@ -361,16 +373,29 @@ async function observeAll(tabId) {
 // Boucle observer → Claude décide → exécuter, jusqu'à « finish ». Renvoie { status, message, tabId }.
 async function agentLoop(tabId, job, files, onNewPage) {
   const history = [];
-  let seenUrl = "";
+  let seenPage = "", lastKey = "", repeats = 0;
+  // Signature d'une page ou d'une étape : adresse + intitulés des champs visibles (les formulaires en étapes changent
+  // souvent d'étape sans changer d'adresse).
+  const signature = (o) => o.url + "|" + o.elements.filter((e) => ["input", "select", "textarea"].includes(e.tag)).map((e) => e.label).join("|");
   for (let step = 0; step < 25; step++) {
-    const url = (await chrome.tabs.get(tabId).catch(() => ({}))).url || "";
-    if (url !== seenUrl && onNewPage) { seenUrl = url; await onNewPage(tabId).catch(() => {}); }   // passe rapide : règles, réseau, IA
-    const { obs, map } = await observeAll(tabId);
+    let { obs, map } = await observeAll(tabId);
+    if (signature(obs) !== seenPage && onNewPage) {        // nouvelle page ou étape : passe rapide (règles, réseau, IA)
+      await onNewPage(tabId).catch(() => {});
+      ({ obs, map } = await observeAll(tabId));
+      seenPage = signature(obs);
+    }
     const res = await api("/api/agent/step", { method: "POST", body: { job_id: job.id, step, observation: obs, history } }).catch(() => null);
     if (!res || !res.actions) return { status: "need_user", message: "CandiPilot injoignable : termine toi-même.", tabId };
+    if (res.stop) throw { stop: true };
+    // Boucle : même action, même page, mêmes erreurs 3 fois → on s'arrête et on dit précisément ce qui bloque.
+    const key = JSON.stringify(res.actions) + signature(obs) + JSON.stringify(obs.errors || []);
+    repeats = key === lastKey ? repeats + 1 : 0;
+    lastKey = key;
+    if (repeats >= 2)
+      return { status: "need_user", message: "Bloqué sur cette étape" + ((obs.errors || []).length ? " — le site indique : " + obs.errors.slice(0, 3).join(" ; ") : "") + ".", tabId };
     let moved = false;
     for (const a of res.actions) {
-      if (a.name === "finish") return { ...a.input, tabId };
+      if (a.name === "finish") return { ...a.input, tabId, allow_submit: !!res.allow_submit };
       if (a.name === "wait") { await sleep(Math.min(10, Math.max(1, a.input.seconds || 2)) * 1000); history.push("attente"); continue; }
       const m = map[a.input.id];
       let r = "élément inconnu";
@@ -380,7 +405,7 @@ async function agentLoop(tabId, job, files, onNewPage) {
         r = (x && x.result) || "erreur";
       }
       history.push(`${a.name} ${JSON.stringify(a.input).slice(0, 140)} → ${r}`);
-      if (a.name === "click" && r === "ok") { moved = true; break; }      // la page peut changer : on la relit
+      if (a.name === "click" && r.startsWith("ok")) { moved = true; break; }   // la page peut changer : on la relit
     }
     if (moved) {
       await sleep(1800);
@@ -393,14 +418,24 @@ async function agentLoop(tabId, job, files, onNewPage) {
 }
 
 async function doApply(job) {
+  try { return await doApplyNow(job); }
+  catch (e) { if (e && e.stop) return { status: "failed", detail: "Arrêtée par toi." }; throw e; }
+}
+
+// Étapes (phase) persistées par CandiPilot : OPENING → FILLING → READY_TO_SUBMIT / SUBMITTING → SUBMITTED,
+// ou AUTHENTICATION_REQUIRED / HUMAN_ACTION_REQUIRED / UNSUPPORTED. Arrêt immédiat possible depuis CandiPilot.
+async function doApplyNow(job) {
   const host = new URL(job.url).hostname;
   if (!(await chrome.permissions.contains({ origins: [new URL(job.url).origin + "/*"] })))
     return { status: "permission", detail: `Autorise CandiPilot sur ${host} : clique sur l'icône CandiPilot (en haut à droite de Chrome) puis « Autoriser les sites carrières », et clique « Reprendre l'envoi ».` };
   const profile = await api("/api/agent/profile");
   profile.answers = job.answers || {};
   const files = { cv: await fileB64(job.cv), letter: await fileB64(job.letter) };
-  const beat = (text) => api(`/api/agent/jobs/${job.id}/progress`, { method: "POST", body: { text } }).catch(() => {});
-  // Onglet visible : le candidat relit et envoie lui-même.
+  const beat = async (text, phase = "") => {
+    const r = await api(`/api/agent/jobs/${job.id}/progress`, { method: "POST", body: { text, phase } }).catch(() => null);
+    if (r && r.stop) throw { stop: true };
+  };
+  await beat(`Ouverture de l'offre sur ${host}…`, "OPENING");
   let tab = await chrome.tabs.create({ url: job.url, active: true });
   await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   await waitLoaded(tab.id);
@@ -417,44 +452,46 @@ async function doApply(job) {
   const target = new URL((await chrome.tabs.get(tab.id)).url || job.url).origin;
   if (!(await chrome.permissions.contains({ origins: [target + "/*"] })))
     return { status: "permission", detail: `Le formulaire est sur ${new URL(target).hostname} : clique sur l'icône CandiPilot puis « Autoriser les sites carrières », et clique « Reprendre l'envoi ».` };
-  const res = await fillFrames(tab.id, profile, files, { jobId: job.id });
-  // L'agent IA prend la main pour tout le reste (boutons inattendus, étapes, listes, cases), jusqu'à l'envoi.
+  await beat("Remplissage du formulaire…", "FILLING");
+  const hasPassword = () => run(tab.id, () => !![...document.querySelectorAll("input[type=password]")].find((e) => e.offsetParent !== null)).catch(() => false);
+  // Passe rapide (règles, réseau de neurones, IA) à chaque page, puis l'agent Claude pour tout le reste.
+  let auto = false;
   const runAgent = async () => {
     const r = await agentLoop(tab.id, job, files, (id) => fillFrames(id, profile, files, { jobId: job.id }));
     if (r.tabId && r.tabId !== tab.id) tab = await chrome.tabs.get(r.tabId);
+    auto = auto || !!r.allow_submit;
     if (r.status === "not_applicable") return r;
-    await beat(r.status === "ready_to_submit" ? `Prêt : ${r.message} Vérifie, complète l'orange et clique « Envoyer ».`
-      : `À toi : ${r.message} CandiPilot reprendra dès que la page change.`);
+    if (r.status === "ready_to_submit") {
+      if (r.allow_submit && /envoy/i.test(r.message || "")) await beat("Envoi en cours : attente de la confirmation du site…", "SUBMITTING");
+      else await beat(`Prêt : ${r.message} Vérifie, complète l'orange et clique « Envoyer ».`, "READY_TO_SUBMIT");
+    } else {
+      const login = await hasPassword();
+      await beat(login ? `${host} demande de créer un compte ou de te connecter : ton e-mail est prérempli, choisis ton mot de passe et valide. CandiPilot reprendra ensuite.`
+        : `À toi : ${r.message} CandiPilot reprendra dès que la page change.`, login ? "AUTHENTICATION_REQUIRED" : "HUMAN_ACTION_REQUIRED");
+    }
     return r;
   };
   const first = await runAgent();
-  if (first.status === "not_applicable") return { status: "failed", detail: "Pas de formulaire de candidature trouvé : " + first.message };
+  if (first.status === "not_applicable") return { status: "unsupported", detail: "Pas de formulaire de candidature trouvé : " + first.message };
   doApply.lastEmpty = (await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: countEmptyFields }).catch(() => []))
-    .reduce((n, f) => n + (f.result || 0), 0);           // référence : seuls de NOUVEAUX champs relancent le remplissage
-  const login = await run(tab.id, () => !![...document.querySelectorAll("input[type=password]")].find((e) => e.offsetParent !== null)).catch(() => false);
-  await beat(login
-    ? `${host} demande de créer un compte ou de te connecter : ton e-mail est prérempli, choisis ton mot de passe et valide. CandiPilot remplira ensuite chaque étape du formulaire.`
-    : `Formulaire rempli (${res.filled.length + res.check.length} champs) : vérifie, complète l'orange et clique « Envoyer ».`);
-  // Attente de la page de confirmation (20 min), avec signe de vie au serveur. Si de nouveaux champs apparaissent
-  // (connexion / création de compte faite par le candidat, étape suivante), ils sont remplis à leur tour.
+    .reduce((n, f) => n + (f.result || 0), 0);           // référence : seuls de NOUVEAUX champs relancent l'agent
+  // Attente de la page de confirmation (20 min) : seule une confirmation explicite du site vaut « Envoyée ».
+  // Nouvelle page / étape / après connexion : la passe rapide et l'agent reprennent.
   let lastUrl = (await chrome.tabs.get(tab.id)).url;
   for (let i = 0; i < 400; i++) {
     await sleep(3000);
     const t = await chrome.tabs.get(tab.id).catch(() => null);
     if (!t) return { status: "uncertain", detail: "Onglet fermé avant la confirmation : si tu as envoyé la candidature, clique « Je l'ai envoyée »." };
+    const proof = await run(tab.id, detectConfirmation).catch(() => null);
+    if (proof) return { status: "submitted", detail: auto ? `Envoyée par CandiPilot sur ${host} (envoi automatique autorisé par toi)` : `Envoyée par toi sur ${host} (formulaire rempli par CandiPilot)`,
+                        proof: "Page de confirmation : " + proof.slice(0, 250) };
     if (i % 3 === 2) {
       const empty = (await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: countEmptyFields }).catch(() => []))
         .reduce((n, f) => n + (f.result || 0), 0);
-      if (empty >= 2 && (t.url !== lastUrl || empty > (doApply.lastEmpty || 0))) {
-        lastUrl = t.url;
-        await fillFrames(tab.id, profile, files, { jobId: job.id }).catch(() => null);
-        await runAgent();                                  // nouvelle page / étape / après connexion : l'agent reprend
-      }
+      if (empty >= 2 && (t.url !== lastUrl || empty > (doApply.lastEmpty || 0))) { lastUrl = t.url; await runAgent(); }
       doApply.lastEmpty = empty;
     }
-    const proof = await run(tab.id, detectConfirmation).catch(() => null);
-    if (proof) return { status: "submitted", detail: `Envoyée par toi sur ${host} (formulaire rempli par CandiPilot)`, proof: "Page de confirmation : " + proof.slice(0, 250) };
-    if (i % 20 === 19) await beat("En attente de ton clic sur « Envoyer »…");
+    if (i % 20 === 19) await beat(auto ? "En attente de la confirmation du site…" : "En attente de ton clic sur « Envoyer »…");
   }
   return { status: "uncertain", detail: "Pas de page de confirmation repérée en 20 min : si tu as envoyé, clique « Je l'ai envoyée »." };
 }

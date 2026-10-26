@@ -197,20 +197,21 @@ def finish_submit(job: dict, status: str, detail: str, proof: str = "") -> None:
         if not a:
             return
         if status in ("submitted", "skipped"):
-            _set_app(c, app_id, statut="confirmee", detail=detail, date_envoi=db.now(),
+            _set_app(c, app_id, statut="confirmee", detail=detail, date_envoi=db.now(), phase="SUBMITTED",
                      preuve=proof or "JobTeaser : « Vous avez postulé à cette offre »")
             db.add_event(c, uid, "success", f"Confirmation reçue : {a['entreprise']}.", app_id)
         elif status == "uncertain":
-            _set_app(c, app_id, statut="incertaine", detail=detail)
+            _set_app(c, app_id, statut="incertaine", detail=detail, phase="READY_TO_SUBMIT" if a["phase"] in ("READY_TO_SUBMIT", "FILLING") else a["phase"] or "")
             db.add_event(c, uid, "warning", f"Envoi non confirmé pour {a['entreprise']} : vérification à faire.", app_id)
         elif status in ("login", "captcha", "permission"):
             # Le robot s'arrête et passe la main : il ne contourne jamais une vérification anti-robot.
             if status == "login":
                 c.execute("UPDATE preferences SET jobteaser_status='expired' WHERE user_id=?", (uid,))
-            _set_app(c, app_id, statut="attente_utilisateur", detail=detail)
+            _set_app(c, app_id, statut="attente_utilisateur", detail=detail,
+                     phase="AUTHENTICATION_REQUIRED" if status == "login" else "HUMAN_ACTION_REQUIRED")
             db.add_event(c, uid, "warning", f"À toi de jouer pour {a['entreprise']} : {detail}", app_id)
         else:
-            _set_app(c, app_id, statut="echec", detail=detail)
+            _set_app(c, app_id, statut="echec", detail=detail, phase="UNSUPPORTED" if status == "unsupported" else "FAILED")
             db.add_event(c, uid, "error", f"Échec de l'envoi pour {a['entreprise']} : {detail}", app_id)
 
 

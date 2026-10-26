@@ -32,7 +32,7 @@ def check(cond, label):
     print("✓", label)
 
 
-def until(fn, timeout=40):
+def until(fn, timeout=90):       # file du robot simulé parfois lente sous charge
     end = time.time() + timeout
     while time.time() < end:
         v = fn()

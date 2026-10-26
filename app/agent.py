@@ -34,7 +34,16 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def agent_user(authorization: str = Header(default="")) -> dict:
+# Version minimale de l'extension pour chaque type de tâche (une extension plus ancienne ne sait pas la faire).
+MIN_VERSION = {"apply": "0.6.0"}
+
+
+def _older(a: str, b: str) -> bool:
+    parse = lambda v: [int(x) if x.isdigit() else 0 for x in (v or "0").split(".")[:3]] + [0] * 3
+    return parse(a)[:3] < parse(b)[:3]
+
+
+def agent_user(authorization: str = Header(default=""), x_candipilot_version: str = Header(default="")) -> dict:
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(401, "Extension non reliée.")
@@ -43,8 +52,12 @@ def agent_user(authorization: str = Header(default="")) -> dict:
                          WHERE t.token_hash=? AND u.statut='actif'""", (_hash(token),)).fetchone()
         if not r:
             raise HTTPException(401, "Jeton d'extension invalide : ouvre CandiPilot pour relier l'extension.")
-        c.execute("UPDATE agent_tokens SET last_seen=? WHERE token_hash=?", (db.now(), _hash(token)))
-    return dict(r)
+        # Version annoncée à chaque échange (elle change quand le candidat met l'extension à jour, sans nouvelle liaison).
+        if x_candipilot_version:
+            c.execute("UPDATE agent_tokens SET last_seen=?, version=? WHERE token_hash=?", (db.now(), x_candipilot_version[:20], _hash(token)))
+        else:
+            c.execute("UPDATE agent_tokens SET last_seen=? WHERE token_hash=?", (db.now(), _hash(token)))
+    return dict(r, version=x_candipilot_version)
 
 
 Agent = Depends(agent_user)
@@ -157,6 +170,15 @@ def next_job(response: Response, urgent: int = 0, user=Agent):
                 response.status_code = 204
                 return None
             job = db.row(j)
+            need = MIN_VERSION.get(job["type"])
+            if need and _older(user.get("version") or "0", need):
+                # Extension trop ancienne : on ne lui confie pas la tâche, on le dit clairement au candidat.
+                msg = f"Ton extension CandiPilot (v{user.get('version') or '?'}) est trop ancienne : mets-la à jour (v{need} ou plus) puis clique « Reprendre l'envoi »."
+                c.execute("UPDATE jobs SET statut='erreur', progress=?, updated_at=? WHERE id=?", (msg[:300], db.now(), job["id"]))
+                if job["application_id"]:
+                    worker._set_app(c, job["application_id"], statut="attente_utilisateur", detail=msg)
+                worker.log_event("job_refused_old_extension", user=user["id"], job=job["id"], type=job["type"], version=user.get("version"))
+                continue
             if job["type"] in ("submit", "apply") and not worker.submit_guard(job):
                 c.execute("UPDATE jobs SET statut='termine', progress='Plus rien à envoyer', updated_at=? WHERE id=?", (db.now(), job["id"]))
                 continue
@@ -174,6 +196,11 @@ def next_job(response: Response, urgent: int = 0, user=Agent):
 
 class ProgressIn(BaseModel):
     text: str
+    phase: str = ""
+
+# Étapes détaillées d'une candidature sur le site d'une entreprise (persistées dans applications.phase + journal d'audit).
+PHASES = ("OPENING", "AUTHENTICATION_REQUIRED", "FILLING", "VALIDATING", "READY_TO_SUBMIT", "SUBMITTING", "SUBMITTED",
+          "HUMAN_ACTION_REQUIRED", "UNSUPPORTED", "FAILED")
 
 
 class PartialIn(BaseModel):
@@ -196,9 +223,18 @@ def _own_job(job_id: str, uid: str) -> dict:
 
 @router.post("/api/agent/jobs/{job_id}/progress")
 def job_progress(job_id: str, body: ProgressIn, user=Agent):
-    _own_job(job_id, user["id"])
+    job = _own_job(job_id, user["id"])
     worker.progress(job_id, body.text)
-    return {"ok": True}
+    if body.phase in PHASES and job["application_id"]:
+        with db.tx() as c:
+            old = c.execute("SELECT phase FROM applications WHERE id=?", (job["application_id"],)).fetchone()
+            if old and old["phase"] != body.phase:
+                c.execute("UPDATE applications SET phase=?, updated_at=? WHERE id=?", (body.phase, db.now(), job["application_id"]))
+                c.execute("""INSERT INTO audit_log(user_id, application_id, actor, action, from_status, to_status, detail, created_at)
+                             VALUES (?,?,?,?,?,?,?,?)""", (user["id"], job["application_id"], "extension", "phase", old["phase"] or "",
+                                                           body.phase, body.text[:200], db.now()))
+    # Arrêt demandé par le candidat (tâche plus « en cours ») : l'extension s'arrête immédiatement.
+    return {"ok": True, "stop": job["statut"] != "en_cours"}
 
 
 class FieldsIn(BaseModel):
@@ -295,6 +331,10 @@ def agent_step(body: StepIn, user=Agent):
     if body.step >= llm.AGENT_MAX_STEPS:
         return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "Trop d'étapes : termine toi-même la candidature."}}]}
     with db.tx() as c:
+        if body.job_id:
+            st = c.execute("SELECT statut FROM jobs WHERE id=? AND user_id=?", (body.job_id, user["id"])).fetchone()
+            if st and st["statut"] != "en_cours":            # arrêt immédiat demandé par le candidat
+                return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "Candidature arrêtée par toi."}}], "stop": True}
         if llm.budget_left(c, user["id"]) < llm.AGENT_COST:
             return {"actions": [{"name": "finish", "input": {"status": "need_user", "message": "Limite quotidienne de l'IA atteinte."}}]}
         ctx = robot.load_context(c, user["id"])
@@ -315,7 +355,11 @@ def agent_step(body: StepIn, user=Agent):
         llm.record_usage(c, user["id"], llm.AGENT_COST, usage)
     if body.job_id:
         worker.progress(body.job_id, f"Agent IA, étape {body.step + 1} : " + ", ".join(a["name"] for a in actions))
-    worker.log_event("agent_step", user=user["id"], step=body.step, actions=[a["name"] for a in actions], allow_submit=allow, **usage)
+    # Traces sans donnée personnelle : actions décidées, cibles (n° d'élément), résultat de la précédente.
+    last = str(body.history[-1]).split("→")[-1].strip()[:80] if body.history else ""
+    worker.log_event("agent_step", user=user["id"], step=body.step, actions=[f"{a['name']}#{a['input'].get('id', '')}" for a in actions],
+                     last_result=last, page=urlparse((body.observation or {}).get("url", "")).path[:80],
+                     errors=len((body.observation or {}).get("errors") or []), allow_submit=allow, cost_usd=llm.cost(usage), **usage)
     return {"actions": actions, "allow_submit": allow}
 
 

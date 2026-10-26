@@ -279,6 +279,45 @@ try:
         a = until(lambda: (lambda x: x if x["statut"] == "attente_utilisateur" else None)(api.get(BASE + f"/api/applications/{unk}").json()), 30)
         check(a and "Autoriser les sites carrières" in a["detail"], "site carrières pas encore autorisé : « À toi de jouer » avec la marche à suivre")
 
+        # 5f. Site carrières complet (3 étapes, validation, champ conditionnel, envoi réel du CV, confirmation),
+        #     envoi automatique autorisé : la candidature doit être REÇUE par le site, pas seulement « cliquée ».
+        s = api.post(BASE + "/api/offers", data={"url": BASE + "/fake-site/offre/AF1", "poste": "Analyste Financier Junior",
+                                                 "entreprise": "Groupe Exemple", "apply_type": "external"})
+        full = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
+        api.post(BASE + f"/api/applications/{full}/prepare")
+        until(lambda: api.get(BASE + f"/api/applications/{full}").json()["statut"] == "a_valider", 30)
+        api.post(BASE + f"/api/applications/{full}/apply")
+        sw.evaluate("() => { poll(); return 1; }")
+        a = until(lambda: (lambda x: x if x["statut"] in ("confirmee", "echec", "attente_utilisateur") else None)(api.get(BASE + f"/api/applications/{full}").json()), 120)
+        recu = json.loads(urllib.request.urlopen(BASE + "/fake-site/_candidatures").read())
+        if not a or a["statut"] != "confirmee":
+            x = api.get(BASE + f"/api/applications/{full}").json()
+            print("DEBUG", x["statut"], x.get("phase"), x["detail"], x.get("job"))
+            print("DEBUG log", [l[:230] for l in open(Path(tmp) / "server.log") if "agent_step" in l or "fields_" in l][-12:])
+        check(a and a["statut"] == "confirmee" and a["phase"] == "SUBMITTED" and "GE-AF1-" in a["preuve"],
+              f"site complet : candidature envoyée, confirmée par le site (référence), étape SUBMITTED ({a and (a['statut'], a['phase'], a['detail'][:80])})")
+        check(len(recu) == 1 and recu[0]["cv_name"] == "Mon_CV.pdf" and recu[0]["cv_size"] == len(PDF) and recu[0]["prenom"] == "Alex"
+              and recu[0]["niveau"].startswith("Master") and not recu[0].get("site_web"),
+              "côté site : identité, CV (fichier reçu entier), niveau d'études ; champ piège vide")
+
+        # 5g. Extension trop ancienne (cause des échecs réels : « Tâche inconnue : apply ») : tâche refusée, message clair.
+        tok = sw.evaluate("chrome.storage.local.get('token').then(x => x.token)")
+        s = api.post(BASE + "/api/offers", data={"url": BASE + "/fake-site/offre/OLD", "poste": "Stage", "entreprise": "Old SA", "apply_type": "external"})
+        old_app = next(o["application_id"] for o in api.get(BASE + "/api/offers").json() if o["id"] == s.json()["id"])
+        api.post(BASE + f"/api/applications/{old_app}/prepare")
+        until(lambda: api.get(BASE + f"/api/applications/{old_app}").json()["statut"] == "a_valider", 30)
+        api.post(BASE + f"/api/applications/{old_app}/apply")
+        nxt = urllib.request.Request(BASE + "/api/agent/next", headers={"Authorization": "Bearer " + tok, "X-CandiPilot-Version": "0.4.0"})
+        code = urllib.request.urlopen(nxt).status
+        a = api.get(BASE + f"/api/applications/{old_app}").json()
+        check(code == 204 and a["statut"] == "attente_utilisateur" and "trop ancienne" in a["detail"],
+              "extension trop ancienne : candidature non confiée, « mets à jour l'extension » affiché")
+        # 5h. Arrêt immédiat demandé par le candidat.
+        check(api.post(BASE + f"/api/applications/{old_app}/resume").status == 202, "reprise après mise à jour")
+        r = api.post(BASE + f"/api/applications/{old_app}/stop")
+        check(r.status == 200 and r.json()["statut"] == "attente_utilisateur" and r.json()["phase"] == "HUMAN_ACTION_REQUIRED"
+              and api.get(BASE + f"/api/applications/{old_app}").json()["job"]["statut"] == "erreur", "arrêt immédiat : tâche stoppée, étape persistée")
+
         # 6. Sécurité du jeton.
         bad = urllib.request.Request(BASE + "/api/agent/next", headers={"Authorization": "Bearer faux"})
         try:

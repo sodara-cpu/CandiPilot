@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 )""", None),
     (6, "Entreprises suivies par défaut (ajoutées une seule fois par compte)", """
 ALTER TABLE preferences ADD COLUMN default_sources_at TEXT DEFAULT ''""", None),
+    (7, "Étape détaillée d'une candidature sur le site d'une entreprise (moteur de candidature)", """
+ALTER TABLE applications ADD COLUMN phase TEXT DEFAULT ''""", None),
 ]
 
 # Entreprises suivies par défaut pour chaque compte : catalogue construit par scripts/find_sources.py (API publiques
