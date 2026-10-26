@@ -84,7 +84,36 @@ const PHASES = { OPENING: "Ouverture de l'offre", AUTHENTICATION_REQUIRED: "Conn
 const statusBadge = (s) => `<span class="badge ${STATUS[s]?.[1] || "b-mute"}">${esc(STATUS[s]?.[0] || s)}</span>`;
 const MODES = { auto: "Automatique", assisted: "Assisté", manual: "Semi-assisté" };
 
+// Carte « Ton copilote » : ce qu'il fait maintenant, son rythme, ses chiffres clés (jamais un grand bloc vide).
+const JOB_LABEL = { search: "Recherche JobTeaser", discover: "Lecture des sites des entreprises", rank: "Notation des offres par l'IA",
+  prepare: "Préparation d'un dossier", submit: "Envoi JobTeaser", apply: "Candidature sur le site", verify: "Vérification d'un envoi" };
+const inHours = (iso) => { const h = Math.round((new Date(iso) - Date.now()) / 36e5); return h <= 0 ? "très bientôt" : h < 24 ? `dans ${h} h` : `dans ${Math.round(h / 24)} j`; };
+function copilotCard(cp) {
+  const ext = cp.extension || {};
+  const extLine = cp.fake || ext.robot !== "extension" ? "" : !ext.linked ? "à installer"
+    : ext.latest && ext.version && olderThan(ext.version, ext.latest) ? `v${ext.version} — mise à jour ${ext.latest} disponible` : ext.online ? `reliée, v${ext.version}` : `reliée (Chrome fermé ?)`;
+  const run = (cp.running || []).map((j) => `<div class="task"><span class="tick"><span class="spin"></span></span>
+      <span class="grow">${esc(JOB_LABEL[j.type] || j.type)}${j.entreprise ? ` · ${esc(j.entreprise)}` : ""}
+      <span class="meta-line">${esc(j.type === "apply" && j.phase ? (PHASES[j.phase] || j.phase) : j.progress || (j.statut === "en_attente" ? "en file d'attente" : "en cours"))}</span></span></div>`).join("");
+  const stat = (n, l) => `<div class="cstat"><b>${n}</b><span>${l}</span></div>`;
+  return `
+    <div class="spread"><div><h2>Ton copilote</h2><div class="sub" style="font-size:13px">${cp.last_search_at ? "Dernière recherche " + ago(cp.last_search_at) : "Pas encore de recherche"}</div></div>
+      <span class="badge" style="background:${cp.paused ? "rgba(255,255,255,.12)" : "rgba(18,184,154,.18)"};color:${cp.paused ? "#fff" : "#5EE6C8"}"><span class="dot" style="background:${cp.paused ? "#aaa" : "#12B89A"}"></span>${cp.paused ? "En pause" : "Actif"}</span></div>
+    <div><div class="clabel">En ce moment</div>${run || `<div class="task idle">Aucune tâche en cours</div>`}</div>
+    <div class="task">${cp.paused ? `<span class="tick off">${svg("pause", 14, 2.2)}</span>Recherche automatique<span class="meta">en pause</span>`
+      : `<span class="tick">${svg("tick", 14, 2.2)}</span>Recherche automatique<span class="meta">toutes les ${cp.every_hours} h${cp.next_search_at ? " · prochaine " + inHours(cp.next_search_at) : ""}</span>`}</div>
+    <div class="cstats">${stat(cp.sources, ext.robot === "extension" ? "entreprises suivies + JobTeaser" : "entreprises suivies")}${stat(cp.offers_week, "offres cette semaine")}${stat(cp.ai_today, "notées par l'IA aujourd'hui")}</div>
+    ${extLine ? `<div class="task"><span class="tick">${svg("plug", 14, 2)}</span>Extension<span class="meta">${esc(extLine)}</span></div>` : ""}
+    <div class="row" style="flex-wrap:wrap;margin-top:auto">
+      <button class="btn btn-ghost" id="pause">${cp.paused ? "Reprendre" : "Mettre en pause"}</button>
+      <button class="btn btn-ghost" id="searchNow">Lancer une recherche</button>
+      <a class="btn btn-ghost" href="#/criteres">Modifier les critères</a>
+    </div>`;
+}
+
 function appState(a) {
+  // Offre sur le site d'une entreprise, dossier prêt : l'action est « Postuler » (avec l'extension).
+  if (a.statut === "a_valider" && a.apply_type && a.apply_type !== "jobteaser") return `<span class="badge b-violet">Postuler</span>`;
   if (a.statut === "a_valider") {
     if (a.mode === "manual") return `<span class="badge b-mute">Semi-assisté</span>`;
     if (a.open_questions) return `<span class="badge b-amber">${a.open_questions > 1 ? a.open_questions + " questions ouvertes" : "Question ouverte"}</span>`;
@@ -109,6 +138,8 @@ const ICON = {
   doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>',
+  pause: '<path d="M9 6v12M15 6v12"/>',
+  plug: '<path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0zM12 16v5"/>',
 };
 const svg = (name, size = 20, sw = 1.8) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
 const LOGO = `<span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-8 6 8"/><circle cx="12" cy="19" r="1.2" fill="#fff"/></svg></span>`;
@@ -306,7 +337,7 @@ async function dashboardView() {
       <span class="label">${label}</span><span class="value">${value}</span><span class="note">${hint}</span></a>`;
   // « À faire » : uniquement ce qui attend une action de l'utilisateur.
   const todo = [];
-  d.to_validate.slice(0, 4).forEach((a) => todo.push(`<a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)} · dossier prêt</div></span>${appState(a)}${svg("chev", 18)}</a>`));
+  d.to_validate.slice(0, 4).forEach((a) => todo.push(`<a class="item" href="#/candidature/${a.id}">${mono(a.entreprise)}<span class="grow"><div class="t">${esc(a.poste)}</div><div class="s">${esc(a.entreprise)} · dossier prêt${a.apply_type && a.apply_type !== "jobteaser" ? " · candidature sur le site, avec l'extension" : ""}</div></span>${appState(a)}${svg("chev", 18)}</a>`));
   if (n.echec) todo.push(`<a class="item" href="#/envoi"><span class="dot-ic err">!</span><span class="grow"><div class="t">${n.echec} candidature${n.echec > 1 ? "s n'ont" : " n'a"} pas pu partir</div><div class="s">Voir la raison et reprendre</div></span>${svg("chev", 18)}</a>`);
   if (n.attente_utilisateur) todo.push(`<a class="item" href="#/candidatures"><span class="dot-ic warn">!</span><span class="grow"><div class="t">${n.attente_utilisateur} envoi${n.attente_utilisateur > 1 ? "s" : ""} en pause : à toi de jouer</div><div class="s">Reconnexion ou vérification anti-robot à faire, puis « Reprendre l'envoi »</div></span>${svg("chev", 18)}</a>`);
   if (n.incertaine) todo.push(`<a class="item" href="#/envoi"><span class="dot-ic warn">?</span><span class="grow"><div class="t">${n.incertaine} envoi${n.incertaine > 1 ? "s" : ""} à vérifier</div><div class="s">La confirmation n'a pas été reçue</div></span>${svg("chev", 18)}</a>`);
@@ -329,18 +360,7 @@ async function dashboardView() {
         <div class="spread" style="margin-bottom:8px"><h2>À faire</h2>${todo.length ? `<span class="badge b-violet">${todo.length}</span>` : ""}</div>
         ${todo.length ? todo.join("") : `<div class="empty">Rien à faire pour l'instant : ton copilote s'occupe du reste.</div>`}
       </div>
-      <div class="card pad copilot stack">
-        <div class="spread"><div><h2>Ton copilote</h2><div class="sub" style="font-size:13px">${cp.last_search_at ? "Dernière recherche " + ago(cp.last_search_at) : "Pas encore de recherche"}</div></div>
-          <span class="badge" style="background:${cp.paused ? "rgba(255,255,255,.12)" : "rgba(18,184,154,.18)"};color:${cp.paused ? "#fff" : "#5EE6C8"}"><span class="dot" style="background:${cp.paused ? "#aaa" : "#12B89A"}"></span>${cp.paused ? "En pause" : "Actif"}</span></div>
-        <div>
-          ${running ? `<div class="task"><span class="tick"><span class="spin"></span></span>${esc(JOBN[running.type] || running.type)}<span class="meta">${esc(running.progress || (running.statut === "en_attente" ? "En file" : "En cours"))}</span></div>` : ""}
-          <div class="task"><span class="tick">${svg("tick", 14, 2.2)}</span>Recherche automatique<span class="meta">${cp.paused ? "Suspendue" : "Toutes les " + cp.every_hours + " h"}</span></div>
-        </div>
-        <div class="row" style="flex-wrap:wrap;margin-top:auto">
-          <button class="btn btn-ghost" id="pause">${cp.paused ? "Reprendre" : "Mettre en pause"}</button>
-          <button class="btn btn-ghost" id="searchNow">Lancer une recherche</button>
-          <a class="btn btn-ghost" href="#/criteres">Modifier les critères</a>
-        </div>
+      <div class="card pad copilot stack">${copilotCard(cp)}</div>
       </div>
     </section>
     <section class="stack">

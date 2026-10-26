@@ -288,3 +288,16 @@ details.adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mu
 .srcgrid li .btn{padding:0 6px;min-height:24px}
 .srcchips.scroll{max-height:220px;overflow:auto;padding:2px}
 .srchstat{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px;font-size:13.5px}.srchstat li{display:flex;gap:8px;align-items:center}
+
+/* Carte « Ton copilote » : activité en cours, rythme, chiffres clés */
+.copilot .clabel{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.55);margin-bottom:2px}
+.copilot .task .grow{flex:1;min-width:0}
+.copilot .task .meta-line{display:block;font-size:12.5px;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.copilot .task.idle{color:rgba(255,255,255,.6);font-size:13.5px}
+.copilot .task .tick.off{background:rgba(255,255,255,.06);color:rgba(255,255,255,.6)}
+.copilot .cstats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.copilot .cstat{background:rgba(255,255,255,.07);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.copilot .cstat b{font-size:20px;line-height:1.1}
+.copilot .cstat span{font-size:12px;color:rgba(255,255,255,.7)}
+.grid.g2{align-items:start}
+@media (max-width:520px){.copilot .cstats{grid-template-columns:1fr 1fr}}

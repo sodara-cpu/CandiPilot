@@ -1276,7 +1276,7 @@ def admin_site_update(domain: str, body: SitePolicyIn, user=CurrentUser):
 def dashboard(user=CurrentUser):
     uid = user["id"]
     with db.tx() as c:
-        last_search = c.execute("""SELECT updated_at FROM jobs WHERE user_id=? AND type='search' AND statut='termine'
+        last_search = c.execute("""SELECT updated_at FROM jobs WHERE user_id=? AND type IN ('search','discover') AND statut='termine'
                                    ORDER BY updated_at DESC LIMIT 1""", (uid,)).fetchone()
         prefs = _prefs(c, uid)
         n_offers = c.execute("SELECT COUNT(*) n FROM offers WHERE user_id=?", (uid,)).fetchone()["n"]
@@ -1300,6 +1300,15 @@ def dashboard(user=CurrentUser):
         unread = c.execute("SELECT COUNT(*) n FROM events WHERE user_id=? AND read=0", (uid,)).fetchone()["n"]
         jobs = db.rows(c.execute("""SELECT type, statut, progress, updated_at FROM jobs WHERE user_id=?
                                     ORDER BY created_at DESC LIMIT 4""", (uid,)))
+        # Ce que fait le copilote en ce moment, et ses chiffres clés.
+        running = db.rows(c.execute("""SELECT j.type, j.statut, j.progress, j.created_at, o.entreprise, a.phase FROM jobs j
+                                       LEFT JOIN applications a ON a.id=j.application_id LEFT JOIN offers o ON o.id=a.offer_id
+                                       WHERE j.user_id=? AND j.statut IN ('en_attente','en_cours') AND j.type<>'check_sites'
+                                       ORDER BY j.created_at LIMIT 6""", (uid,)))
+        n_sources = c.execute("SELECT COUNT(*) n FROM job_sources WHERE user_id=? AND enabled=1", (uid,)).fetchone()["n"]
+        ai_today = c.execute("SELECT offers FROM llm_usage WHERE user_id=? AND day=?", (uid, db.now()[:10])).fetchone()
+        agent_st = agent.status(c, uid)
+        plan = c.execute("SELECT last_search_at FROM preferences WHERE user_id=?", (uid,)).fetchone()
         sent = c.execute("""SELECT a.statut, a.date_envoi, a.updated_at FROM applications a
                             WHERE a.user_id=? AND a.statut IN ('confirmee','soumission','incertaine')""", (uid,)).fetchall()
 
@@ -1320,7 +1329,12 @@ def dashboard(user=CurrentUser):
                   "to_validate": counts.get("a_valider", 0), "counts": counts},
         # Dernière VRAIE recherche (last_search_at sert aussi à programmer la première, à l'inscription).
         "copilot": {"paused": prefs["paused"], "last_search_at": last_search["updated_at"] if last_search else "",
-                    "every_hours": prefs["search_every_hours"], "jobs": jobs, "fake": worker.FAKE},
+                    "every_hours": prefs["search_every_hours"], "jobs": jobs, "fake": worker.FAKE, "running": running,
+                    "next_search_at": "" if prefs["paused"] or not (plan and plan["last_search_at"]) else
+                        (datetime.fromisoformat(plan["last_search_at"]) + timedelta(hours=max(1, int(prefs["search_every_hours"] or 24)))).isoformat(timespec="seconds"),
+                    "sources": n_sources, "offers_week": n_week, "ai_today": ai_today["offers"] if ai_today else 0,
+                    "extension": {"linked": agent_st["linked"], "online": agent_st["online"], "version": agent_st["version"],
+                                  "latest": agent_st["latest"], "robot": agent_st["robot"]}},
         "chart": list(chart.values()),
         "to_validate": to_validate,
         "recommended": recommended,
